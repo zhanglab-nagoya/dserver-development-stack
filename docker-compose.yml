@@ -259,6 +259,10 @@ services:
       VUE_APP_OAUTH2_PROVIDER_NAME: "ORCID"
       # Set to "true" to also show username/password form alongside OAuth2
       VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "false"
+      # Set to "false" to hide the SignIn screen and run the webapp without a JWT.
+      # Must be paired with the dserver running in its own no-auth mode — flipping
+      # this flag alone will produce 401s from the API.
+      VUE_APP_AUTH_ENABLED: "true"
     ports:
       - "8080:8080"
     networks:
