@@ -1,0 +1,30 @@
+# Caddyfile — HTTPS deployment (TLS termination + reverse proxy for the web UI).
+#
+# Serves the shared server cert (./certs/server.crt, signed by ./certs/ca.crt) — the SAME
+# cert/CA MinIO uses for its native TLS on :9000. Clients trust one root: ./certs/ca.crt.
+# Generate the cert with ./gen-tls-certs.sh before `docker compose up`.
+#
+# The site address is taken from $DEPLOY_FQDN — see .env / .env.template. Caddy
+# substitutes {$VAR} at parse time, so the variable must be in caddy's process
+# environment (docker-compose.override.yml passes it through).
+#
+# NOTE: S3/MinIO is intentionally NOT proxied here. Caddy (Go net/http) canonicalises
+# response header names (x-amz-meta-* -> X-Amz-Meta-*), which breaks botocore's
+# case-sensitive S3 metadata parsing on dserver's server-side reads. MinIO therefore
+# terminates its own TLS on :9000 (see docker-compose.override.yml).
+
+{$DEPLOY_FQDN} {
+	tls /certs/server.crt /certs/server.key
+
+	# dserver is mounted under /lookup inside its container (gunicorn SCRIPT_NAME=/lookup).
+	# `handle` (not handle_path) keeps the /lookup prefix on the forwarded request.
+	handle /lookup* {
+		reverse_proxy dserver:5000
+	}
+
+	# Everything else is the Vue webapp (dev server, hot-reload). Caddy upgrades the
+	# HMR websocket automatically.
+	handle {
+		reverse_proxy webapp:8080
+	}
+}

@@ -20,7 +20,8 @@ services:
       POSTGRES_PASSWORD: dserver_secret
       POSTGRES_DB: dserver
     ports:
-      - "5432:5432"
+      # Bound to localhost: a public-IP host, reachable via SSH tunnel for admin only.
+      - "127.0.0.1:5432:5432"
     networks:
       - dserver_net
     healthcheck:
@@ -41,7 +42,8 @@ services:
       MONGO_INITDB_ROOT_USERNAME: dserver
       MONGO_INITDB_ROOT_PASSWORD: dserver_secret
     ports:
-      - "27017:27017"
+      # Bound to localhost: reachable via SSH tunnel for admin only.
+      - "127.0.0.1:27017:27017"
     networks:
       - dserver_net
     healthcheck:
@@ -57,8 +59,10 @@ services:
   minio:
     image: minio/minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # Port 9000 (S3 API) is NOT published here: Caddy owns host :9000 and fronts MinIO
+      # over TLS so presigned URLs are browser-usable. Caddy reaches MinIO over the
+      # internal network as `minio:9000`. Console (9001) is localhost-only (SSH tunnel).
+      - "127.0.0.1:9001:9001"
     networks:
       dserver_net:
         aliases:
@@ -282,7 +286,8 @@ services:
       LDAP_DEFAULT_BASE_URIS: "s3://dtool-bucket"
       LDAP_GRANT_REGISTER: "true"
     ports:
-      - "5000:5000"
+      # Fronted by Caddy at /lookup; localhost binding kept for local debugging only.
+      - "127.0.0.1:5000:5000"
     networks:
       - dserver_net
     command: /scripts/start-dserver.sh
@@ -350,7 +355,8 @@ services:
       # this flag alone will produce 401s from the API.
       VUE_APP_AUTH_ENABLED: "true"
     ports:
-      - "8080:8080"
+      # Fronted by Caddy at /; localhost binding kept for local debugging only.
+      - "127.0.0.1:8080:8080"
     networks:
       - dserver_net
     command: npm run serve -- --host 0.0.0.0

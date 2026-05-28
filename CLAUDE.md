@@ -9,11 +9,259 @@ and plugins, from local source checkouts (git submodules) installed in editable 
 > "Known README discrepancies" at the bottom before trusting it. This file reflects what
 > the code actually does.
 
-> **No HTTPS layer on `main`.** `main` is the plain dev stack — plaintext HTTP on
-> localhost, debug server, public MinIO bucket. A separate HTTPS deployment layer (Caddy
-> TLS proxy with Let's Encrypt/ACME, gunicorn, and MinIO over TLS) lives on the
-> **`acme-deployment`** / **`zhanglab-data`** branches, **not** on `main`. Work from those
-> branches if you need a TLS-terminated, internet-facing deployment.
+> **Branch note:** the **`zhanglab-data`** branch adds an HTTPS deployment layer on top
+> of the base dev stack (Caddy TLS proxy, gunicorn, MinIO over TLS). The deployment is
+> parameterised by a single environment variable (`DEPLOY_FQDN`) so the config files
+> here name no specific host. See **"HTTPS deployment recipe (this branch)"** below.
+> The sections after it describe the plain dev stack (`main`), which still applies
+> underneath.
+
+## HTTPS deployment recipe (this branch)
+
+Serves the **webapp on `https://${DEPLOY_FQDN}/`**, the **dserver API under `/lookup`**
+(both on :443 via Caddy), and **S3/MinIO over its own TLS on :9000** for browser-usable
+presigned URLs. One local CA signs the single cert used by both Caddy and MinIO. Layered
+on the base stack via `docker-compose.override.yml` (auto-merged) plus a few base edits.
+The host name is supplied via `DEPLOY_FQDN` in `.env`; none of the config files name a
+specific host.
+
+### Topology
+
+```
+  browser ─HTTPS:443──▶ Caddy ── /lookup* ─▶ dserver:5000  (gunicorn, SCRIPT_NAME=/lookup)
+  (trusts ca.crt)         └──────  /  ──────▶ webapp:8080   (Vue dev server, hot-reload)
+  browser ─HTTPS:9000─────────────────────▶ minio:9000     (MinIO native TLS; presign host)
+  dserver ─HTTPS:9000─▶ (FQDN → minio alias) ▶ minio:9000   (read + sign, no proxy)
+```
+
+Webapp (`/`) and API (`/lookup`) are **same-origin** ⇒ no CORS, no mixed-content. MinIO is
+**not** proxied by Caddy (see "Why MinIO does its own TLS"). Externally published: Caddy
+80/443 and MinIO 9000; everything else is bound to `127.0.0.1`.
+
+### Prerequisite: set DEPLOY_FQDN and generate the certs first
+
+```bash
+cp .env.template .env
+# edit .env and set DEPLOY_FQDN=<your-host>  (and optionally OAUTH2_CLIENT_ID/SECRET)
+./gen-tls-certs.sh        # writes ./certs/{ca,server}.{crt,key} (git-ignored)
+```
+`gen-tls-certs.sh` reads `DEPLOY_FQDN` from `.env` (or the shell) and fails loudly if it
+is unset. One local CA (`ca.crt`/`ca.key`) signs one SAN leaf (`server.crt`/`server.key`,
+SAN = `$DEPLOY_FQDN`,`minio`,`localhost`,`127.0.0.1`). Caddy serves it on :443 and MinIO
+on :9000. Must exist before `docker compose up` (bind-mounted into both).
+
+### Files this deployment adds / changes
+
+| File | Role |
+|---|---|
+| `.env.template` | Documents `DEPLOY_FQDN` (and `OAUTH2_*`); copy to `.env`. |
+| `gen-tls-certs.sh` | Generates the local CA + shared server cert into `./certs` (git-ignored). Reads `DEPLOY_FQDN`. |
+| `Caddyfile` | TLS (`tls /certs/server.crt …`) + routing only: `/lookup*`→dserver, `/`→webapp. Site address is `{$DEPLOY_FQDN}`. Does **not** proxy S3. |
+| `docker-compose.override.yml` | Adds `caddy` (on `dserver_net`!); MinIO native TLS (`--certs-dir`, :9000, FQDN alias); `minio-init` over TLS; `dserver` gunicorn+`SCRIPT_NAME`+S3/CA/OAuth2 env; `index-s3` + `webapp` env. All host-specific values come from `${DEPLOY_FQDN}`. |
+| `compose/dserver/scripts/start-dserver-gunicorn.sh` | Same prep as `start-dserver.sh`, then `exec gunicorn "dservercore:create_app()"`. Bind-mounted via `/app` (no image rebuild). |
+| `compose/dserver/scripts/make-venv.sh` (edit) | Pin `setuptools<81` (keeps `pkg_resources` for dtool-cli); add `dtool-create`/`dtool-symlink`/`dtool-http`/`ruamel.yaml` (create/freeze/cp). |
+| `compose/webapp/vue.config.js` | Bind-mounted over the container's; `devServer.allowedHosts:"all"` for the proxied FQDN. Avoids editing the submodule. |
+| `docker-compose.yml` (base edits) | postgres/mongo/minio-console/dserver/webapp bound to `127.0.0.1` (MinIO :9000 is re-published by the override). |
+
+### Why gunicorn + `SCRIPT_NAME=/lookup`
+
+Single `/lookup` prefix (modelled on `dserver-minimal`'s single-container) ⇒ the proxy
+needs two rules, not an enumeration of dservercore's ~13 blueprints. Gunicorn applies
+`SCRIPT_NAME=/lookup` to the WSGI environ: `/lookup/config/health` splits into
+`SCRIPT_NAME=/lookup` + `PATH_INFO=/config/health`, so routing matches and
+`url_for(_external=True)` emits correct `https://…/lookup/…`. `flask run` (Werkzeug) does
+**not** honour `SCRIPT_NAME` the same way. Caddy uses `handle /lookup*` (not `handle_path`)
+to keep the prefix; the healthcheck probes `/lookup/config/health`.
+
+### Why MinIO does its own TLS (not behind Caddy)
+
+Caddy (Go `net/http`) **canonicalises response header names** — MinIO's lowercase
+`x-amz-meta-type` becomes `X-Amz-Meta-Type`. botocore slices the metadata key *after* the
+`x-amz-meta-` prefix **without lowercasing**, so proxied reads come back keyed `Type`/
+`Handle` and dtool-s3's lowercase lookups `KeyError` (`'type'`). The body is intact, so
+browser downloads through a proxy are fine, but dserver's **server-side reads** (needed to
+mint presigned URLs) break. Fix: MinIO terminates its own TLS on :9000 (lowercase headers
+preserved); Caddy is out of the S3 path entirely.
+
+Note the signed-url plugin's `SIGNED_URL_HOST_REWRITE` is a **post-signing string
+replace** (`__init__.py:222`) and breaks SigV4 (which signs the Host) — leave it unset.
+We instead sign for the real public host:
+
+- `dserver`/`index-s3` use `DTOOL_S3_ENDPOINT_dtool-bucket=https://${DEPLOY_FQDN}:9000`.
+  The `minio` service has a **network alias = `${DEPLOY_FQDN}`**, so that name resolves
+  to MinIO inside the network too — dserver reads **and** signs against the same
+  host:port the browser uses (consistent SigV4 Host). Trust is scoped to boto via
+  **`AWS_CA_BUNDLE=/certs/ca.crt` only** — do *not* set `REQUESTS_CA_BUNDLE`/
+  `SSL_CERT_FILE` globally, or public HTTPS (ORCID token exchange, pip) would fail to
+  verify against the private root.
+- Path-style addressing throughout (`…:9000/dtool-bucket/<key>`); MinIO has no base-path
+  mode, so a `/s3/…` subpath on :443 is not viable. MinIO CORS is `*` (base compose).
+
+**Caveat:** the dev bucket is **public-read** (`mc anonymous set public`), so presigned
+URLs add little protection until it's made private.
+
+### Certificate trust (shared local CA, not publicly trusted)
+
+The recipe assumes no public DNS record for `$DEPLOY_FQDN` (so Let's Encrypt is not
+usable). HTTPS is "valid" only for clients that trust `./certs/ca.crt`. On each client:
+```bash
+# copy ./certs/ca.crt off the host, then (Linux):
+sudo cp ca.crt /usr/local/share/ca-certificates/local-ca.crt && sudo update-ca-certificates
+# macOS: add to login keychain as "Always Trust"; Firefox/Chrome: import in cert settings.
+# And resolve the name (no public DNS) — client /etc/hosts (or the VPN):
+echo "<PUBLIC_IP> <your-host>" | sudo tee -a /etc/hosts
+```
+To go publicly-trusted later: have your network admin add an A record for `$DEPLOY_FQDN`
+and open inbound :80, then point Caddy at a Let's Encrypt cert (and reissue MinIO's cert
+from the same trusted chain, or front MinIO with a trusted cert).
+
+### Data ingestion
+
+MinIO is TLS-only now, so push to the **HTTPS** endpoint (no plaintext `http://minio:9000`).
+From inside the dserver container the bundled client works:
+```bash
+docker compose exec dserver bash -c "source /venv/bin/activate && bash /scripts/create-test-dataset.sh"
+```
+Then index: `docker compose --profile index up index-s3` (or `flask base_uri index s3://dtool-bucket`).
+Host-side clients set `DTOOL_S3_ENDPOINT_dtool-bucket=https://$DEPLOY_FQDN:9000` and
+trust `ca.crt` (e.g. `AWS_CA_BUNDLE`/`REQUESTS_CA_BUNDLE`).
+
+### Bring-up & verification
+
+```bash
+cp .env.template .env                          # set DEPLOY_FQDN (+ optional ORCID creds)
+./gen-tls-certs.sh                             # REQUIRED first — creates ./certs
+docker compose up -d --build                   # first run builds venv + webapp; slow on ~2 GB RAM
+docker compose ps                              # wait for healthy (dserver start_period 60s)
+
+CA=./certs/ca.crt
+H=$(grep '^DEPLOY_FQDN=' .env | cut -d= -f2-)
+curl --cacert $CA --resolve $H:443:127.0.0.1 https://$H/lookup/config/health   # {"status":"healthy"}
+curl --cacert $CA --resolve $H:443:127.0.0.1 -I https://$H/                     # SPA 200
+curl --cacert $CA --resolve $H:9000:127.0.0.1 https://$H:9000/minio/health/live # 200 (MinIO TLS)
+# presigned URL: mint an admin JWT (see indexall.sh), GET /lookup/signed-urls/dataset/<url-enc-uri>,
+# then fetch an item_url with --resolve $H:9000:127.0.0.1 → 200 + file bytes.
+```
+
+### Gotchas discovered during deployment (don't regress these)
+
+- **Caddy must declare `networks: [dserver_net]`** — it's only in the override, so without
+  it Compose drops it on the default network and it can't resolve `dserver`/`webapp`
+  (symptom: 502, `lookup dserver … server misbehaving`).
+- **Caddy needs `DEPLOY_FQDN` in its process env** — the Caddyfile site address is
+  `{$DEPLOY_FQDN}`, which is substituted at parse time. The override passes it through
+  via `environment:`. Without it, Caddy refuses to start.
+- **`setuptools<81`** — v81 removed `pkg_resources`, which `dtool-cli` imports
+  unconditionally; without the pin the `dtool` CLI won't start.
+- **dtool create/freeze/cp** need `dtool-create` (+`dtool-symlink`,`dtool-http`,
+  `ruamel.yaml`); `dtool-cli`+`dtool-info` alone don't provide them. There is no
+  `dtool-cp` package — `cp`/`copy` live in `dtool-create`.
+- **`AWS_CA_BUNDLE` only** for the internal CA (see above) — not the global requests/ssl
+  bundles.
+
+### Authentication (ORCID OAuth2 — active, verified)
+
+Real ORCID login is wired and working. Flow: webapp → `GET /lookup/auth/login` → ORCID →
+`GET /lookup/auth/callback` → dserver mints an RS256 JWT → webapp (token in the redirect).
+
+- **Credentials:** `OAUTH2_CLIENT_ID`/`OAUTH2_CLIENT_SECRET` live in `.env` (git-ignored).
+  Register an app at orcid.org (or sandbox.orcid.org) for the Public API.
+- **Redirect URI to register at ORCID, exactly:**
+  `https://$DEPLOY_FQDN/lookup/auth/callback`
+  (derived as `OAUTH2_BASE_URL` + `/auth/callback`; mismatch ⇒ ORCID rejects the request).
+  ORCID never fetches it — only the user's browser does — so a private CA / `/etc/hosts`
+  / VPN setup is fine as long as the browser trusts `ca.crt` and resolves the FQDN.
+- **The username IS the ORCID iD.** A new ORCID user authenticates but gets
+  `401 Unauthorized` on API calls until **provisioned** — this is the access gate:
+  ```
+  docker compose exec dserver bash -lc 'source /venv/bin/activate && \
+    flask user add <ORCID-iD>            # add --is_admin for administrators
+    flask user search_permission <ORCID-iD> s3://dtool-bucket
+    flask user register_permission <ORCID-iD> s3://dtool-bucket'
+  ```
+  Provisioned users persist in Postgres.
+- The login page shows only the ORCID button (`VUE_APP_SHOW_USERNAME_PASSWORD_FORM=false`);
+  the username/password form is dead with this plugin. The `admin` DB user remains for
+  CLI/scripted JWTs (see `indexall.sh`).
+- The internal CA is scoped to boto via `AWS_CA_BUNDLE` only, so the server-side
+  dserver→orcid.org token exchange verifies against the public trust store (don't set
+  `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` globally).
+- A dev-only alternative that accepts any username/password (`dserver-dummy-token-generator`,
+  livMatS/dserver-development-stack PR #2) exists but is **not** used here — it is
+  unauthenticated, so only acceptable behind a VPN/internal firewall.
+- **Webapp-side toggle:** `VUE_APP_AUTH_ENABLED` (default `"true"` in
+  `docker-compose.yml`). Setting it to `"false"` hides the SignIn screen and lets
+  the webapp call the API without an `Authorization` header. This is a frontend
+  switch only — it **must** be paired with dserver running in its own no-auth mode,
+  otherwise every request returns 401. The webapp's `/users/<username>/summary`
+  call was also moved to `/me/summary` so the panel works in both modes without
+  needing a username from a JWT.
+
+### Future: institutional SSO (exploration, not yet implemented)
+
+Goal: let users authenticate with institutional credentials instead of (or alongside)
+ORCID. The available plugin is **OIDC/OAuth2-only**; SAML needs the separate SAML plugin
+in this repo. Two viable paths, depending on what your IdP speaks:
+
+- **Path A — OIDC via Microsoft Entra ID (easiest, config-only).** If your institution's
+  identity provider includes a Microsoft 365 / Entra ID tenant and IT will let you
+  register an app, configure the existing OAuth2 plugin like ORCID/Google:
+  ```
+  OAUTH2_AUTHORIZATION_URL = https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/authorize
+  OAUTH2_TOKEN_URL         = https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token
+  OAUTH2_USERINFO_URL      = https://graph.microsoft.com/oidc/userinfo
+  OAUTH2_SCOPE             = openid email profile
+  # register redirect URI: https://$DEPLOY_FQDN/lookup/auth/callback
+  ```
+  Tolerant of a no-public-DNS setup (Entra doesn't fetch the redirect URI; the browser
+  does). Nuance: the username (UPN) is usually in the **id_token**, which the plugin
+  doesn't decode — it reads the token response + `/oidc/userinfo`. Map username to
+  `email`/`sub`, or add a few lines to read `preferred_username` from the id_token.
+
+- **Path B — SAML via a Shibboleth / academic federation IdP.** Needed for standard
+  attribute release (`eduPersonPrincipalName`, `mail`, affiliation) through federations
+  such as **GakuNin** (Japan, NII), **eduGAIN** (international), or InCommon (US). The
+  OAuth2 plugin can't do SAML; two ways to add it:
+  - **Native SAML SP plugin (chosen direction; drafted).** `dserver-token-generator-plugin-saml/`
+    is a sibling `dservercore.extension` (pysaml2) that makes dserver a SAML SP directly —
+    `/login` (AuthnRequest), `/acs`, `/metadata`, `/sls` — and mints the same dserver JWT.
+    Prefix is configurable (`SAML_URL_PREFIX`, default `/saml` to coexist with OAuth2's
+    `/auth`). Pure logic (attribute map, JWT) is unit-tested; the live flow is untested
+    pending IdP metadata + SP registration. **Not yet wired into the stack** (needs
+    `xmlsec1` in the Dockerfile + install in `make-venv.sh`) — see its `README.md`.
+  - **Proxy alternative:** run **SATOSA** (SAML2 SP ↔ OIDC OP) and point the existing
+    OAuth2 plugin at it — no dserver code, but an extra container.
+  - **Prerequisites (either way):** register dserver as an SP with the federation
+    operator + your institutional IdP admin (metadata exchange + attribute release) and
+    **publicly reachable SP endpoints** — conflicts with the current no-public-DNS /
+    private-CA setup, so resolve that first.
+
+**Gating step:** ask your institutional IT whether a self-hosted service may register an
+**Entra ID OIDC app** (→ Path A) or must integrate as a **SAML SP** in your federation
+(→ Path B). The provisioning model is unchanged from ORCID: the IdP-supplied identifier
+(Entra UPN / SAML ePPN) becomes the dserver username and needs a one-time
+`flask user add` to gain permissions.
+
+Refs: GakuNin <https://www.gakunin.jp/en>; SATOSA
+<https://github.com/IdentityPython/SATOSA> (saml2-to-oidc).
+
+### Open items / things to confirm
+
+- **Institutional SSO:** decide Path A (Entra OIDC) vs Path B (SAML via SATOSA or the
+  native plugin) — gated on an answer from institutional IT about Entra app registration
+  vs SAML SP onboarding.
+- **Inbound reachability:** confirm the firewall delivers `:443` and `:9000` from where
+  clients connect (public vs VPN-only) — cannot be tested from the box itself.
+- **RAM:** Vue dev server + mongo + postgres + minio + gunicorn on ~2 GB is tight; the
+  webapp `npm` compile is the OOM risk (`NODE_OPTIONS=--max-old-space-size=512` set).
+
+### Submodules over HTTPS on hosts with no GitHub SSH key
+
+`.gitmodules` uses `git@github.com:` SSH URLs. If the host has no GitHub SSH key, all
+submodules are public, so init them over HTTPS without modifying `.gitmodules`:
+```bash
+git -c url."https://github.com/".insteadOf="git@github.com:" submodule update --init --recursive
+```
 
 ## What gets deployed
 
