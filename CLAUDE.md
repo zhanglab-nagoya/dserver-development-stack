@@ -189,6 +189,27 @@ Provisioned users persist in Postgres. The `admin` DB user remains for CLI/scrip
   standalone `compose/dserver/scripts/start-token-generator.sh` provided simple login; the
   LDAP plugin replaces them with real credential validation.
 
+## Per-user config generation (`dserver-config-generator-plugin`)
+
+An in-repo extension plugin generates **per-user** `dtool.json` and `dtool_readme.yml`
+**dynamically** (replacing the old static download templates). JWT-protected routes:
+
+- `GET /config-generator/dtool.json` — personalized config (attachment)
+- `GET /config-generator/dtool_readme.yml` — personalized readme template (attachment)
+- `GET /config-generator/info` — non-secret diagnostics
+
+The caller is identified from the JWT (`sub`); `DSERVER_USERNAME` and
+`DTOOL_S3_DATASET_PREFIX=u/<username>/` are filled in accordingly. The webapp's Account-menu
+download buttons fetch these with the bearer token (`VUE_APP_DTOOL_JSON_PATH` /
+`VUE_APP_DTOOL_README_YAML_PATH` point at the routes).
+
+**S3 credentials are pluggable** via `CONFIG_GENERATOR_CREDENTIAL_PROVIDER`:
+`none` (default; no secret emitted), `static` (configured shared key/secret), or `minio`
+(mints a per-user MinIO **service account** scoped to `u/<username>/`, the stack default —
+see the `CONFIG_GENERATOR_MINIO_*` env in `docker-compose.yml`). MinIO support is isolated to
+`credentials/minio.py` + the `[minio]` pip extra and is fully optional/strippable; the plugin
+runs without MinIO. Minted creds expire (`CONFIG_GENERATOR_MINIO_SVCACCT_EXPIRY_SECONDS`).
+
 ## Common operations
 
 ```bash
