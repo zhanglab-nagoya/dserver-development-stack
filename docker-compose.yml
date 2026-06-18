@@ -296,6 +296,9 @@ services:
       # Mount source for hot-reload in development
       - ./dtool-lookup-webapp/dtool-lookup-webapp/src:/app/src
       - ./dtool-lookup-webapp/dtool-lookup-webapp/public:/app/public
+      # Stack-specific download templates (served under /stack-templates).
+      # Keeps the webapp submodule's generic templates untouched.
+      - ./compose/webapp/templates:/app/public/stack-templates:ro
       # NOTE: do NOT bind-mount ./dserver-client-js here. The host checkout is
       # unbuilt (no dist/, no node_modules), so mounting it shadows the client
       # library that the image builds (dist/ + deps like spark-md5) and breaks
@@ -318,6 +321,13 @@ services:
       VUE_APP_OAUTH2_PROVIDER_NAME: "ORCID"
       # Show the username/password form (LDAP) alongside the ORCID button.
       VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "true"
+
+      # Account-menu download buttons for starter config / readme templates.
+      VUE_APP_OFFER_DTOOL_JSON_DOWNLOAD: "true"
+      VUE_APP_OFFER_DTOOL_README_YAML_DOWNLOAD: "true"
+      # Serve our localhost-specific dtool.json (the submodule's default points
+      # at demo.dtool.dev). The readme yaml uses the submodule's generic template.
+      VUE_APP_DTOOL_JSON_PATH: "stack-templates/dtool.json"
 
       # Login-screen info panel ("More Info"): surface the bundled LDAP demo
       # credentials (rendered as HTML). Matches compose/ldap/bootstrap/*.ldif.
