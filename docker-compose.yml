@@ -156,6 +156,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      minio:
+        condition: service_healthy
       ldap:
         condition: service_healthy
     volumes:
@@ -270,6 +272,27 @@ services:
       LDAP_AUTO_PROVISION_USERS: "true"
       LDAP_DEFAULT_BASE_URIS: "s3://dtool-bucket"
       LDAP_GRANT_REGISTER: "true"
+
+      # =======================================================================
+      # Config-generator plugin: dynamic per-user dtool.json / readme at
+      # /config-generator/*. credential_provider=minio mints per-user MinIO
+      # service accounts scoped to u/<username>/. Set to "none"/"static" to run
+      # without MinIO.
+      # =======================================================================
+      CONFIG_GENERATOR_CREDENTIAL_PROVIDER: "minio"
+      CONFIG_GENERATOR_S3_PUBLIC_ENDPOINT: "http://localhost:9000"
+      CONFIG_GENERATOR_S3_BUCKET: "dtool-bucket"
+      CONFIG_GENERATOR_DATASET_PREFIX_TEMPLATE: "u/{username}/"
+      CONFIG_GENERATOR_DSERVER_URL: "http://localhost:5000"
+      CONFIG_GENERATOR_TOKEN_GENERATOR_URL: "http://localhost:5000/auth/ldap/token"
+      CONFIG_GENERATOR_DEFAULT_BASE_URI: "s3://dtool-bucket"
+      # minio provider: admin endpoint is the INTERNAL service address; the
+      # generated dtool.json embeds the public endpoint above.
+      CONFIG_GENERATOR_MINIO_ADMIN_ENDPOINT: "minio:9000"
+      CONFIG_GENERATOR_MINIO_ADMIN_ACCESS_KEY: "minioadmin"
+      CONFIG_GENERATOR_MINIO_ADMIN_SECRET_KEY: "minioadmin"
+      CONFIG_GENERATOR_MINIO_SECURE: "false"
+      CONFIG_GENERATOR_MINIO_SVCACCT_EXPIRY_SECONDS: "86400"
     ports:
       - "5000:5000"
     networks:
@@ -296,9 +319,6 @@ services:
       # Mount source for hot-reload in development
       - ./dtool-lookup-webapp/dtool-lookup-webapp/src:/app/src
       - ./dtool-lookup-webapp/dtool-lookup-webapp/public:/app/public
-      # Stack-specific download templates (served under /stack-templates).
-      # Keeps the webapp submodule's generic templates untouched.
-      - ./compose/webapp/templates:/app/public/stack-templates:ro
       # NOTE: do NOT bind-mount ./dserver-client-js here. The host checkout is
       # unbuilt (no dist/, no node_modules), so mounting it shadows the client
       # library that the image builds (dist/ + deps like spark-md5) and breaks
@@ -325,9 +345,10 @@ services:
       # Account-menu download buttons for starter config / readme templates.
       VUE_APP_OFFER_DTOOL_JSON_DOWNLOAD: "true"
       VUE_APP_OFFER_DTOOL_README_YAML_DOWNLOAD: "true"
-      # Serve our localhost-specific dtool.json (the submodule's default points
-      # at demo.dtool.dev). The readme yaml uses the submodule's generic template.
-      VUE_APP_DTOOL_JSON_PATH: "stack-templates/dtool.json"
+      # Dynamic, per-user generation by the config-generator plugin (the
+      # download fetch sends the JWT). Replaces the old static templates.
+      VUE_APP_DTOOL_JSON_PATH: "http://127.0.0.1:5000/config-generator/dtool.json"
+      VUE_APP_DTOOL_README_YAML_PATH: "http://127.0.0.1:5000/config-generator/dtool_readme.yml"
 
       # Login-screen info panel ("More Info"): surface the bundled LDAP demo
       # credentials (rendered as HTML). Matches compose/ldap/bootstrap/*.ldif.

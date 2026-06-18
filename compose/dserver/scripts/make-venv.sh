@@ -46,6 +46,9 @@ pip install -e /app/dserver-token-generator-plugin-oauth2
 echo "==> Installing dserver-token-generator-plugin-ldap..."
 pip install -e /app/dserver-token-generator-plugin-ldap
 
+echo "==> Installing dserver-config-generator-plugin (with minio extra)..."
+pip install -e "/app/dserver-config-generator-plugin[minio]"
+
 echo "==> Installing additional dependencies..."
 pip install gunicorn psycopg2-binary PyJWT requests authlib httpx python-dotenv ldap3
 

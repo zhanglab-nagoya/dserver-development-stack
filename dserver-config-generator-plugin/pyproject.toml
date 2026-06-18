@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dserver-config-generator-plugin"
+version = "0.1.0"
+description = "Dynamically generate per-user dtool.json and readme templates for dserver"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.10"
+# Core dependencies — note: NO minio here. MinIO support is an optional extra
+# (see [project.optional-dependencies]) so the plugin runs without it.
+dependencies = [
+    "flask>=2.0.0",
+    "flask-smorest>=0.40.0",
+    "jinja2>=3.0.0",
+    "pyyaml>=5.0",
+    "dservercore>0.22.0",
+]
+
+[project.optional-dependencies]
+minio = ["minio>=7.2.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.entry-points."dservercore.extension"]
+config-generator = "dserver_config_generator_plugin:ConfigGeneratorPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dserver_config_generator_plugin*"]
+
+[tool.setuptools.package-data]
+dserver_config_generator_plugin = ["templates/*.j2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
