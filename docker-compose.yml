@@ -244,8 +244,11 @@ services:
       # Mount source for hot-reload in development
       - ./dtool-lookup-webapp/dtool-lookup-webapp/src:/app/src
       - ./dtool-lookup-webapp/dtool-lookup-webapp/public:/app/public
-      # Mount dserver-client-js for development
-      - ./dserver-client-js:/dserver-client-js
+      # NOTE: do NOT bind-mount ./dserver-client-js here. The host checkout is
+      # unbuilt (no dist/, no node_modules), so mounting it shadows the client
+      # library that the image builds (dist/ + deps like spark-md5) and breaks
+      # webpack resolution. The image already contains the built client lib.
+      # - ./dserver-client-js:/dserver-client-js
     environment:
       # Use 127.0.0.1 instead of localhost for OAuth2 compatibility
       # (ORCID doesn't allow localhost as redirect URI)

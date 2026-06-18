@@ -176,9 +176,19 @@ docker compose down
 docker volume rm dserver-development-stack_dserver_venv
 docker compose up -d
 
-# Get an admin JWT from the running API
-TOKEN=$(curl -s -X POST http://localhost:5000/auth/token \
-  -H "Content-Type: application/json" -d '{"username":"admin"}' | jq -r '.token')
+# Get an admin JWT. The OAuth2 plugin does NOT mint username-only tokens at
+# POST /auth/token (that was the old dummy generator — it now returns
+# "Missing api_key or username"). Mint one from the private key instead, the
+# same way indexall.sh does (requires host python with PyJWT):
+TOKEN=$(python3 - <<'PY'
+import jwt
+from datetime import datetime, timedelta, timezone
+key = open('compose/dserver/jwt/jwt_key').read()
+print(jwt.encode({'sub': 'admin', 'iat': datetime.now(timezone.utc),
+                  'exp': datetime.now(timezone.utc) + timedelta(hours=1),
+                  'fresh': True}, key, algorithm='RS256'))
+PY
+)
 curl -H "Authorization: Bearer $TOKEN" http://localhost:5000/config/info
 ```
 
