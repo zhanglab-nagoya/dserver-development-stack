@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dserver-token-generator-plugin-ldap"
+version = "0.1.0"
+description = "LDAP username/password token generator plugin for dserver"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=2.0.0",
+    "flask-smorest>=0.40.0",
+    "ldap3>=2.9.0",
+    "PyJWT>=2.0.0",
+    "cryptography>=3.4.0",
+    "dservercore>0.22.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.entry-points."dservercore.extension"]
+ldap = "dserver_token_generator_plugin_ldap:LdapTokenGeneratorPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dserver_token_generator_plugin_ldap*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

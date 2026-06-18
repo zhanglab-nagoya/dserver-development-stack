@@ -1,0 +1,18 @@
+# Dev seed data for the bundled OpenLDAP directory (osixia/openldap).
+# Applied on first boot under the base dc=example,dc=org (created from
+# LDAP_DOMAIN). Provides one demo account: testuser / test_password.
+#
+# For real deployments, do not seed users here — point LDAP_URI at your own
+# directory and manage accounts there.
+
+dn: ou=users,dc=example,dc=org
+objectClass: organizationalUnit
+ou: users
+
+dn: cn=testuser,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: testuser
+sn: User
+uid: testuser
+mail: testuser@example.org
+userPassword: test_password

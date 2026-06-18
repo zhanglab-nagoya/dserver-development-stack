@@ -39,7 +39,8 @@ share the `dserver_net` bridge network.
 - MinIO: `minioadmin` / `minioadmin`; bucket `dtool-bucket` (public).
 - dserver API: http://localhost:5000 — health at `/config/health`, Swagger at `/doc/swagger`.
 - Webapp: http://127.0.0.1:8080 (use `127.0.0.1`, not `localhost` — see OAuth2 note).
-- Token endpoint: `POST /auth/token` (provided by the OAuth2 token generator plugin).
+- Token endpoints: ORCID OAuth2 under `/auth/oauth2/*`; username/password (LDAP) at
+  `POST /auth/ldap/token` (see "Authentication").
 
 ## Deploying locally — the real flow
 
@@ -125,40 +126,68 @@ entries are the supported workaround.
 
 JWT keys (`compose/dserver/jwt/jwt_key{,.pub}`) are runtime-generated and git-ignored.
 
-## Authentication (ORCID OAuth2)
+## Authentication
 
-Authentication is handled by `dserver-token-generator-plugin-oauth2`, configured for
-**ORCID** in `docker-compose.yml`. Flow: webapp → `GET /auth/login` → ORCID →
-`GET /auth/callback` → dserver mints an RS256 JWT → webapp (token in the redirect).
+Two token generators run side by side as `dservercore.extension` plugins (dservercore
+registers every extension blueprint, so multiple coexist as long as their URL prefixes
+differ). Both mint RS256 JWTs signed with the same key dserver verifies; both gate access
+on dserver's own user table (`sub` claim must be a provisioned user, else 401 on every
+route). The webapp shows the **ORCID button and the username/password form together**.
+
+### ORCID OAuth2 — `dserver-token-generator-plugin-oauth2` (prefix `/auth/oauth2`)
+
+Flow: webapp → `GET /auth/oauth2/login` → ORCID → `GET /auth/oauth2/callback` → dserver
+mints a JWT → webapp (token in the redirect fragment).
 
 - **Credentials:** `OAUTH2_CLIENT_ID`/`OAUTH2_CLIENT_SECRET` live in `.env` (git-ignored).
   Register an app at orcid.org (or sandbox.orcid.org) for the Public API. The stack still
   starts without these, but the login flow won't complete.
-- **Redirect URI to register at ORCID:** `OAUTH2_BASE_URL` + `/auth/callback` (must match
-  exactly, or ORCID rejects the request). On the local stack `OAUTH2_BASE_URL` defaults to
-  `http://127.0.0.1:5000`, so the URI is `http://127.0.0.1:5000/auth/callback`. ORCID never
-  fetches it — only the user's browser does — so a localhost value works for dev.
-- **The username IS the ORCID iD.** A new ORCID user authenticates but gets
-  `401 Unauthorized` on API calls until **provisioned** — this is the access gate:
-  ```
-  docker compose exec dserver bash -lc 'source /venv/bin/activate && \
-    flask user add <ORCID-iD>            # add --is_admin for administrators
-    flask user search_permission <ORCID-iD> s3://dtool-bucket
-    flask user register_permission <ORCID-iD> s3://dtool-bucket'
-  ```
-  Provisioned users persist in Postgres.
-- The login page shows only the ORCID button (`VUE_APP_SHOW_USERNAME_PASSWORD_FORM=false`);
-  the username/password form is dead with this plugin. The `admin` DB user remains for
-  CLI/scripted JWTs (see `indexall.sh`).
-- **Webapp-side toggle:** `VUE_APP_AUTH_ENABLED` (default `"true"` in `docker-compose.yml`).
-  Setting it to `"false"` hides the SignIn screen and lets the webapp call the API without
-  an `Authorization` header. This is a frontend switch only — it **must** be paired with
-  dserver running in its own no-auth mode, otherwise every request returns 401. The
-  webapp's `/users/<username>/summary` call was moved to `/me/summary` so the panel works
-  in both modes without needing a username from a JWT.
-- A dev-only alternative that accepts any username/password (`dserver-dummy-token-generator`,
-  livMatS/dserver-development-stack PR #2) exists but is **not** used here — it is
-  unauthenticated, so only acceptable behind a VPN/internal firewall.
+- **Redirect URI to register at ORCID:** `OAUTH2_REDIRECT_URI` — on the local stack
+  `http://127.0.0.1:5000/auth/oauth2/callback` (must match exactly). ORCID never fetches it
+  — only the user's browser does — so a localhost value works for dev. (Note: the plugin
+  moved from `/auth` to `/auth/oauth2` so the LDAP plugin can own `/auth/ldap`; the webapp's
+  OAuth2 URL is set via `VUE_APP_OAUTH2_LOGIN_URL`.)
+- **The username IS the ORCID iD.** A new ORCID user authenticates but gets `401` until
+  **provisioned** (see the `flask user add` / `*_permission` commands below).
+
+### Username/password via LDAP — `dserver-token-generator-plugin-ldap` (prefix `/auth/ldap`)
+
+The restored simple login. The webapp's username/password form POSTs `{username,password}`
+to `POST /auth/ldap/token` (`VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL`); the plugin
+binds against LDAP, and on success mints a JWT.
+
+- **Bundled dev directory:** the `ldap` service (osixia/openldap, seeded via
+  `compose/ldap/bootstrap/*.ldif`) is seeded with
+  **`testuser` / `test_password`**. Point `LDAP_URI` (+ `LDAP_BIND_DN`, `LDAP_USER_BASE_DN`,
+  `LDAP_USER_FILTER`, …) at an external/corporate LDAP for real use; add users there, not in
+  dserver. LDAP config lives in the `dserver` service env in `docker-compose.yml`; see the
+  plugin's `README.md` for all knobs (search-then-bind vs `LDAP_USER_DN_TEMPLATE`, TLS, etc.).
+- **Auto-provisioning:** with `LDAP_AUTO_PROVISION_USERS=true`, a first successful LDAP login
+  creates the dserver user and grants search/register on `LDAP_DEFAULT_BASE_URIS`
+  (`s3://dtool-bucket`) — so LDAP users work with zero manual steps. Set it to `false` to
+  require an admin to `flask user add` them instead.
+
+### User provisioning (both methods) & toggles
+
+```
+docker compose exec dserver bash -lc 'source /venv/bin/activate && \
+  flask user add <username>            # add --is_admin for administrators
+  flask user search_permission <username> s3://dtool-bucket
+  flask user register_permission <username> s3://dtool-bucket'
+```
+Provisioned users persist in Postgres. The `admin` DB user remains for CLI/scripted JWTs
+(see `indexall.sh`).
+
+- **Webapp-side toggle:** `VUE_APP_AUTH_ENABLED` (default `"true"`). Setting it to `"false"`
+  hides the SignIn screen and lets the webapp call the API without an `Authorization` header
+  — a frontend switch only; **must** be paired with dserver in its own no-auth mode or every
+  request returns 401. The webapp's `/users/<username>/summary` call was moved to
+  `/me/summary` so the panel works in both modes.
+- `VUE_APP_SHOW_USERNAME_PASSWORD_FORM` (now `"true"`) shows the form; `VUE_APP_OAUTH2_ENABLED`
+  shows the ORCID button. Either or both can be enabled.
+- Historically a `dserver-dummy-token-generator` (any username/password, no validation) and a
+  standalone `compose/dserver/scripts/start-token-generator.sh` provided simple login; the
+  LDAP plugin replaces them with real credential validation.
 
 ## Common operations
 

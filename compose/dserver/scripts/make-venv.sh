@@ -43,8 +43,11 @@ pip install -e /app/dserver-signed-url-plugin
 echo "==> Installing dserver-token-generator-plugin-oauth2..."
 pip install -e /app/dserver-token-generator-plugin-oauth2
 
+echo "==> Installing dserver-token-generator-plugin-ldap..."
+pip install -e /app/dserver-token-generator-plugin-ldap
+
 echo "==> Installing additional dependencies..."
-pip install gunicorn psycopg2-binary PyJWT requests authlib httpx python-dotenv
+pip install gunicorn psycopg2-binary PyJWT requests authlib httpx python-dotenv ldap3
 
 echo "==> Virtual environment setup complete!"
 pip list
