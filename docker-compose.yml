@@ -318,6 +318,12 @@ services:
       VUE_APP_OAUTH2_PROVIDER_NAME: "ORCID"
       # Show the username/password form (LDAP) alongside the ORCID button.
       VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "true"
+
+      # Login-screen info panel ("More Info"): surface the bundled LDAP demo
+      # credentials (rendered as HTML). Matches compose/ldap/bootstrap/*.ldif.
+      VUE_APP_THIRD_CONTAINER_HEADING: "Demo credentials"
+      VUE_APP_THIRD_CONTAINER_MESSAGE: "Sign in with the bundled LDAP demo account — username <strong>testuser</strong>, password <strong>test_password</strong> — or use the ORCID button. (Dev only.)"
+
       # Set to "false" to hide the SignIn screen and run the webapp without a JWT.
       # Must be paired with the dserver running in its own no-auth mode — flipping
       # this flag alone will produce 401s from the API.
