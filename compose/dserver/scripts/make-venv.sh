@@ -56,13 +56,18 @@ pip install -e /app/dserver-signed-url-plugin
 echo "==> Installing dserver-token-generator-plugin-oauth2..."
 pip install -e /app/dserver-token-generator-plugin-oauth2
 
-# LDAP token generator is DISABLED on the zhanglab-data deployment: this is a public
-# HTTPS host and we authenticate via ORCID OAuth2 only. Leaving the plugin uninstalled
-# means no /auth/ldap blueprint is registered (no second token issuer). The submodule
-# stays checked out; re-enable by uncommenting the line below + the `ldap` service in
-# docker-compose.yml (profiles: ["ldap"]) and dserver's depends_on. See CLAUDE.md.
-# echo "==> Installing dserver-token-generator-plugin-ldap..."
-# pip install -e /app/dserver-token-generator-plugin-ldap
+# LDAP token generator: install ONLY when the site asks for it. Sites that authenticate
+# via ORCID OAuth2 only (e.g. zhanglab-data) leave INSTALL_LDAP_PLUGIN unset/false, so no
+# /auth/ldap blueprint is registered (no second token issuer). Sites that want the
+# username/password path (e.g. the demo) set INSTALL_LDAP_PLUGIN=true in their
+# docker-compose.override.yml's dserver-build-venv environment. The submodule is always
+# checked out either way.
+if [ "${INSTALL_LDAP_PLUGIN:-false}" = "true" ]; then
+    echo "==> Installing dserver-token-generator-plugin-ldap (INSTALL_LDAP_PLUGIN=true)..."
+    pip install -e /app/dserver-token-generator-plugin-ldap
+else
+    echo "==> Skipping LDAP token generator (INSTALL_LDAP_PLUGIN != true)"
+fi
 
 echo "==> Installing additional dependencies..."
 pip install gunicorn psycopg2-binary PyJWT requests authlib httpx python-dotenv ldap3
