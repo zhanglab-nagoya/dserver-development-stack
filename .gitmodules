@@ -37,3 +37,6 @@
 [submodule "dserver-token-generator-plugin-oauth2"]
 	path = dserver-token-generator-plugin-oauth2
 	url = https://github.com/livMatS/dserver-token-generator-plugin-oauth2.git
+[submodule "dserver-direct-mongo-plugin"]
+	path = dserver-direct-mongo-plugin
+	url = https://github.com/livMatS/dserver-direct-mongo-plugin.git

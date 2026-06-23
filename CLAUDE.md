@@ -53,7 +53,7 @@ share the `dserver_net` bridge network.
   key (the repos are public).
 
 ### 1. Initialize submodules — REQUIRED
-The 13 submodules are **not checked out** in a fresh clone (the directories are empty
+The 14 submodules are **not checked out** in a fresh clone (the directories are empty
 placeholders). Nothing builds until they are populated:
 
 ```bash
@@ -108,8 +108,9 @@ entries are the supported workaround.
   `scripts/entrypoint.sh`, which just `source /venv/bin/activate` then `exec "$@"`.
 - **`scripts/make-venv.sh`** (run by `dserver-build-venv`) — creates `/venv`, installs
   editable: `dtoolcore`, `dtool-s3`, `dservercore`, `dserver-retrieve-plugin-mongo`,
-  `dserver-dependency-graph-plugin`, `dserver-signed-url-plugin`,
-  `dserver-token-generator-plugin-oauth2`; from PyPI: `dtool-cli`, `dtool-info`,
+  `dserver-dependency-graph-plugin`, `dserver-direct-mongo-plugin`,
+  `dserver-signed-url-plugin`, `dserver-token-generator-plugin-oauth2`,
+  `dserver-token-generator-plugin-ldap`; from PyPI: `dtool-cli`, `dtool-info`,
   `dserver-search-plugin-mongo`, plus `gunicorn psycopg2-binary PyJWT requests authlib
   httpx python-dotenv`. Writes a `/venv/VENV-READY` sentinel and **skips rebuild if it
   exists** — see "rebuilding the venv".
@@ -253,12 +254,13 @@ revision (`60ebaabea8a4`) creates the `base_uri`, `user`, and `dataset` tables.
 `migrations/versions/*.py` is git-ignored except that baseline. `start-dserver.sh` runs
 `flask db init/migrate/upgrade` on every boot (the first two are `|| true`).
 
-## Submodules (13)
+## Submodules (14)
 Source: `jic-dtool/*` (upstream dtool/dserver) and `livMatS/*` (lab forks & plugins).
 Core: `dtoolcore`, `dtool` (CLI/meta), `dtool-s3`, `dtool-dserver`, `dservercore`.
 Plugins: `dserver-search-plugin-mongo`, `dserver-retrieve-plugin-mongo`,
-`dserver-dependency-graph-plugin`, `dserver-signed-url-plugin`,
-`dserver-notification-plugin`, `dserver-token-generator-plugin-oauth2`.
+`dserver-dependency-graph-plugin`, `dserver-direct-mongo-plugin`,
+`dserver-signed-url-plugin`, `dserver-notification-plugin`,
+`dserver-token-generator-plugin-oauth2`.
 Frontend: `dtool-lookup-webapp`, `dserver-client-js`.
 
 (Not every submodule is installed by `make-venv.sh` — e.g. `dtool`,

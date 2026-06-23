@@ -47,6 +47,9 @@ pip install -e /app/dserver-retrieve-plugin-mongo
 echo "==> Installing dserver-dependency-graph-plugin..."
 pip install -e /app/dserver-dependency-graph-plugin
 
+echo "==> Installing dserver-direct-mongo-plugin..."
+pip install -e /app/dserver-direct-mongo-plugin
+
 echo "==> Installing dserver-signed-url-plugin..."
 pip install -e /app/dserver-signed-url-plugin
 
