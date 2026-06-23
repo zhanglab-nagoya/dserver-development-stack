@@ -14,7 +14,9 @@ python -m venv /venv
 source /venv/bin/activate
 
 echo "==> Upgrading pip..."
-pip install --upgrade pip setuptools wheel
+# Pin setuptools<81: setuptools 81 (2025) removed pkg_resources, which dtool-cli still
+# imports unconditionally (dtool_cli.cli) — without this, the `dtool` CLI fails to start.
+pip install --upgrade pip wheel "setuptools<81"
 
 echo "==> Installing dtoolcore..."
 pip install -e /app/dtoolcore
@@ -24,6 +26,14 @@ pip install -e /app/dtool-s3
 
 echo "==> Installing dtool-cli and dtool-info (from PyPI)..."
 pip install dtool-cli dtool-info
+
+# dtool dataset-creation client (provides create/freeze/cp commands) so datasets can be
+# created/pushed from inside the container (e.g. create-test-dataset.sh). Installed
+# --no-deps to avoid pip pulling a pinned dtoolcore over the editable one above; the
+# remaining runtime dep (ruamel.yaml) is added explicitly.
+echo "==> Installing dtool dataset-creation client (create/freeze/cp)..."
+pip install --no-deps dtool-create dtool-symlink dtool-http
+pip install "ruamel.yaml"
 
 echo "==> Installing dservercore..."
 pip install -e /app/dservercore
