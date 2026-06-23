@@ -2,12 +2,14 @@
 # Node.js based container for Vue.js development server
 FROM node:20-alpine
 
-# Copy and build dserver-client-js first
+# Copy and build dserver-client-js first.
+# Its package.json defines a `prepare` script that runs the build (tsup) during
+# `npm install`, so the full source must be present before installing — copying
+# only package*.json first makes `prepare` fail with "Cannot find src/index.ts".
+# (--ignore-scripts is not an option: tsup needs esbuild's install postinstall.)
 WORKDIR /dserver-client-js
-COPY ./dserver-client-js/package*.json ./
-RUN npm install
 COPY ./dserver-client-js/ ./
-RUN npm run build
+RUN npm install
 
 # Set working directory for webapp
 WORKDIR /app
