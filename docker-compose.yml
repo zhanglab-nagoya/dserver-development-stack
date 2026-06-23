@@ -184,6 +184,17 @@ services:
       MONGO_DB: dserver
       MONGO_COLLECTION: datasets
 
+      # Direct MongoDB access plugin (dserver-direct-mongo-plugin) — serves /mongo/query
+      # and /mongo/aggregate. Uses its own DSERVER_-prefixed vars; same DB/collection as
+      # the search/retrieve plugins. Privilege-enforced direct queries are on by default;
+      # aggregations are off (later pipeline stages can bypass privilege checks unless
+      # also enforced at the MongoDB level).
+      DSERVER_MONGO_URI: mongodb://dserver:dserver_secret@mongo:27017/?authSource=admin
+      DSERVER_MONGO_DB: dserver
+      DSERVER_MONGO_COLLECTION: datasets
+      DSERVER_ALLOW_DIRECT_QUERY: "true"
+      DSERVER_ALLOW_DIRECT_AGGREGATION: "false"
+
       # Dependency graph plugin configuration
       DSERVER_ENABLE_DEPENDENCY_VIEW: "True"
       DSERVER_DYNAMIC_DEPENDENCY_KEYS: "True"
@@ -376,6 +387,13 @@ services:
       MONGO_URI: mongodb://dserver:dserver_secret@mongo:27017/?authSource=admin
       MONGO_DB: dserver
       MONGO_COLLECTION: datasets
+
+      # Direct MongoDB access plugin (dserver-direct-mongo-plugin)
+      DSERVER_MONGO_URI: mongodb://dserver:dserver_secret@mongo:27017/?authSource=admin
+      DSERVER_MONGO_DB: dserver
+      DSERVER_MONGO_COLLECTION: datasets
+      DSERVER_ALLOW_DIRECT_QUERY: "true"
+      DSERVER_ALLOW_DIRECT_AGGREGATION: "false"
 
       # S3 configuration for dtool
       DTOOL_S3_ENDPOINT_dtool-bucket: http://minio:9000
