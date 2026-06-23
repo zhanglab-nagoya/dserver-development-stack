@@ -37,12 +37,16 @@ flask db upgrade
 echo "==> Creating default admin user if not exists..."
 flask user add --is_admin admin || echo "    User 'admin' may already exist"
 
-echo "==> Registering S3 base URI..."
-flask base_uri add s3://dtool-bucket || echo "    Base URI may already exist"
+# S3_BUCKET is supplied via the dserver service env (docker-compose.override.yml). Fall back
+# to dtool-bucket for the plain local-minio dev path where S3_BUCKET may be unset.
+BUCKET="${S3_BUCKET:-dtool-bucket}"
+
+echo "==> Registering S3 base URI (s3://${BUCKET})..."
+flask base_uri add "s3://${BUCKET}" || echo "    Base URI may already exist"
 
 echo "==> Granting admin access to S3 bucket..."
-flask user search_permission admin s3://dtool-bucket || echo "    Permission may already exist"
-flask user register_permission admin s3://dtool-bucket || echo "    Permission may already exist"
+flask user search_permission admin "s3://${BUCKET}" || echo "    Permission may already exist"
+flask user register_permission admin "s3://${BUCKET}" || echo "    Permission may already exist"
 
 echo "==> Starting dserver under gunicorn (SCRIPT_NAME=${SCRIPT_NAME:-/}) on :5000..."
 echo "    Reachable through Caddy at https://${DEPLOY_FQDN:-localhost}${SCRIPT_NAME:-}"
@@ -50,7 +54,11 @@ echo "    Reachable through Caddy at https://${DEPLOY_FQDN:-localhost}${SCRIPT_N
 #   (the signed-url path does blocking S3 reads).
 # --forwarded-allow-ips="*": trust Caddy's X-Forwarded-Proto so Flask builds https URLs.
 # Add `--reload` below if you want Python hot-reload (heavier on this box).
-exec gunicorn \
+#
+# export-s3-env.sh injects dtool-s3's per-bucket env vars (DTOOL_S3_*_<bucket>, name contains
+# the bucket so it can't be set via shell `export`) and execs gunicorn — the signed-url path
+# needs them for server-side S3 reads. No-op (just execs gunicorn) when S3_BUCKET is unset.
+exec "$(dirname "$0")/export-s3-env.sh" gunicorn \
     --bind 0.0.0.0:5000 \
     --workers 1 \
     --threads 4 \

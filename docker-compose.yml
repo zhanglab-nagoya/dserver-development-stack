@@ -55,8 +55,14 @@ services:
 
   # ==========================================================================
   # MinIO - S3-compatible object storage
+  #
+  # DISABLED by default on the zhanglab-data branch: the S3 backend is a REMOTE MinIO
+  # (10.0.0.2:9000 over WireGuard), fronted by Caddy's layer4 :9000 terminator (see
+  # docker-compose.override.yml). This local container is kept behind the `local-minio`
+  # profile for the plain dev path only — `docker compose --profile local-minio up`.
   # ==========================================================================
   minio:
+    profiles: ["local-minio"]
     image: minio/minio
     ports:
       # Port 9000 (S3 API) is NOT published here: Caddy owns host :9000 and fronts MinIO
@@ -85,9 +91,10 @@ services:
       timeout: 5s
 
   # ==========================================================================
-  # MinIO bucket initialization
+  # MinIO bucket initialization (only with the `local-minio` profile — see minio above)
   # ==========================================================================
   minio-init:
+    profiles: ["local-minio"]
     image: minio/mc
     depends_on:
       minio:
@@ -123,8 +130,14 @@ services:
   # (consumed by the in-process dserver-token-generator-plugin-ldap).
   # Seeds one demo user: testuser / test_password. Replace with / point at an
   # external LDAP for real deployments.
+  #
+  # DISABLED by default on the zhanglab-data branch (public HTTPS host; ORCID OAuth2 is
+  # the only auth path). Behind the `ldap` profile so it does NOT start with a plain
+  # `docker compose up`; the ldap plugin is also left out of the venv (see make-venv.sh).
+  # Re-enable: `docker compose --profile ldap up` + reinstate make-venv.sh + dserver dep.
   # ==========================================================================
   ldap:
+    profiles: ["ldap"]
     image: osixia/openldap:1.5.0
     # --copy-service lets the bind-mounted bootstrap LDIF be applied on init.
     command: ["--copy-service"]
@@ -157,10 +170,6 @@ services:
       postgres:
         condition: service_healthy
       mongo:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-      ldap:
         condition: service_healthy
     volumes:
       - .:/app
@@ -211,24 +220,26 @@ services:
       # CORS - allow requests from webapp
       CORS_ALLOW_ORIGIN: "*"
 
-      # S3 configuration for dtool
-      DTOOL_S3_ENDPOINT_dtool-bucket: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-
-      # Also provide credentials in DTOOL format for storage broker signing
-      DTOOL_S3_ACCESS_KEY_ID_dtool-bucket: minioadmin
-      DTOOL_S3_SECRET_ACCESS_KEY_dtool-bucket: minioadmin
+      # S3 configuration for dtool. dtool-s3 needs per-bucket env vars whose NAME contains the
+      # bucket (DTOOL_S3_ENDPOINT_<bucket> etc.); compose can't interpolate a var into an env
+      # KEY, so we pass these plain S3_* settings and the entrypoint scripts assemble the
+      # bucket-named trio at runtime (see export-s3-env.sh). The override sets S3_ENDPOINT to
+      # the public TLS host; this http://minio:9000 default only applies to the `local-minio`
+      # dev profile. Bucket name + remote MinIO credentials come from .env.
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set (see .env.template)}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID must be set (see .env.template)}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY must be set (see .env.template)}
 
       # Signed URL plugin configuration
       SIGNED_URL_READ_EXPIRY_SECONDS: "3600"
       SIGNED_URL_WRITE_EXPIRY_SECONDS: "14400"
-      # NOTE: URL rewriting breaks S3 signatures. Instead, add "127.0.0.1 minio"
-      # to /etc/hosts on client machines to resolve the internal hostname.
+      # NOTE: SIGNED_URL_HOST_REWRITE is a post-signing string replace that breaks SigV4
+      # (which signs the Host) — leave it unset. We sign for the real public host instead.
 
       # dtool-dserver URI configuration
       # Enable short URI format: dserver://localhost:5000/<uuid>
-      DSERVER_DEFAULT_BASE_URI: "s3://dtool-bucket"
+      DSERVER_DEFAULT_BASE_URI: "s3://${S3_BUCKET}"
 
       # Flask session secret (required for OAuth2)
       SECRET_KEY: "dev-secret-key-change-in-production"
@@ -401,20 +412,21 @@ services:
       DSERVER_ALLOW_DIRECT_QUERY: "true"
       DSERVER_ALLOW_DIRECT_AGGREGATION: "false"
 
-      # S3 configuration for dtool
-      DTOOL_S3_ENDPOINT_dtool-bucket: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
-      DTOOL_S3_ACCESS_KEY_ID_dtool-bucket: minioadmin
-      DTOOL_S3_SECRET_ACCESS_KEY_dtool-bucket: minioadmin
+      # Plain S3_* settings; export-s3-env.sh assembles the bucket-named DTOOL_S3_* trio at
+      # runtime (see the dserver service note above). The override sets S3_ENDPOINT to the
+      # public TLS host.
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set (see .env.template)}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID must be set (see .env.template)}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY must be set (see .env.template)}
     networks:
       - dserver_net
     entrypoint: /bin/bash
     command: >
       -c "
       source /venv/bin/activate &&
-      echo '==> Indexing all datasets in s3://dtool-bucket...' &&
-      flask base_uri index s3://dtool-bucket &&
+      echo \"==> Indexing all datasets in s3://$${S3_BUCKET}...\" &&
+      /app/compose/dserver/scripts/export-s3-env.sh flask base_uri index s3://$${S3_BUCKET} &&
       echo '==> Indexing complete!'
       "
     profiles:

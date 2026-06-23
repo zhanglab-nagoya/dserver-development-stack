@@ -10,6 +10,12 @@ certs/
 # IDE
 .idea/
 
+# Claude Code session state
+.claude/
+
+# Local operator notes (host-specific MinIO setup protocol — not for the public repo)
+minio.md
+
 # Python
 __pycache__/
 *.py[cod]
