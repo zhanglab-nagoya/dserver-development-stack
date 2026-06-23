@@ -53,7 +53,7 @@ share the `dserver_net` bridge network.
   key (the repos are public).
 
 ### 1. Initialize submodules — REQUIRED
-The 14 submodules are **not checked out** in a fresh clone (the directories are empty
+The 15 submodules are **not checked out** in a fresh clone (the directories are empty
 placeholders). Nothing builds until they are populated:
 
 ```bash
@@ -254,13 +254,13 @@ revision (`60ebaabea8a4`) creates the `base_uri`, `user`, and `dataset` tables.
 `migrations/versions/*.py` is git-ignored except that baseline. `start-dserver.sh` runs
 `flask db init/migrate/upgrade` on every boot (the first two are `|| true`).
 
-## Submodules (14)
+## Submodules (15)
 Source: `jic-dtool/*` (upstream dtool/dserver) and `livMatS/*` (lab forks & plugins).
 Core: `dtoolcore`, `dtool` (CLI/meta), `dtool-s3`, `dtool-dserver`, `dservercore`.
 Plugins: `dserver-search-plugin-mongo`, `dserver-retrieve-plugin-mongo`,
 `dserver-dependency-graph-plugin`, `dserver-direct-mongo-plugin`,
 `dserver-signed-url-plugin`, `dserver-notification-plugin`,
-`dserver-token-generator-plugin-oauth2`.
+`dserver-token-generator-plugin-oauth2`, `dserver-token-generator-plugin-ldap`.
 Frontend: `dtool-lookup-webapp`, `dserver-client-js`.
 
 (Not every submodule is installed by `make-venv.sh` — e.g. `dtool`,
