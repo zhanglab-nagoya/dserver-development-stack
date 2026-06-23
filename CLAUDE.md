@@ -409,3 +409,161 @@ Refs: GakuNin <https://www.gakunin.jp/en>; SATOSA
 - This is a **development** stack: debug mode on, wildcard CORS, hard-coded secrets
   (`SECRET_KEY`, DB passwords, `minioadmin`). Never reuse these settings for anything
   exposed.
+
+## HTTPS deployment recipe (this site: zhanglab-data)
+
+> Site overlay on top of the shared base above. Serves the **webapp on
+> `https://${DEPLOY_FQDN}/`** and the **dserver API under `/lookup`** (both on :443 via
+> Caddy), and **S3 on :9000** where Caddy's **layer4 (raw-TCP) plugin terminates TLS and
+> forwards to the remote MinIO** at `10.0.0.2:9000` (the lab Synology, over the WireGuard
+> tunnel `wg0`). The remote MinIO speaks plain HTTP; there is **no local `minio` container**
+> here (it stays behind the `local-minio` profile, unused). Certs are **publicly-trusted
+> Let's Encrypt**. Auth is **ORCID OAuth2 only** (LDAP not installed). The public host is
+> `data.zhang-laboratory.org` (set via `DEPLOY_FQDN` in `.env`, but **also hardcoded in
+> `caddy.json`** — Caddy JSON has no variable substitution).
+
+### Topology
+
+```
+  browser ─HTTPS:443──▶ Caddy ── /lookup* ─▶ dserver:5000  (gunicorn, SCRIPT_NAME=/lookup)
+  (public LE trust)       └──────  /  ──────▶ webapp:8080   (Vue dev server, hot-reload)
+  browser ─HTTPS:9000─▶ Caddy[layer4]: TLS-terminate(LE) ─raw TCP─▶ 10.0.0.2:9000 (wg0)
+  dserver ─HTTPS:9000─▶ (FQDN → caddy alias) ▶ Caddy[layer4] ─raw TCP─▶ 10.0.0.2:9000
+```
+
+Webapp (`/`) and API (`/lookup`) are **same-origin** ⇒ no CORS/mixed-content. S3 on :9000
+is fronted by Caddy's **layer4** handler, NOT an HTTP reverse proxy (see "Why MinIO is NOT
+fronted by an HTTP reverse proxy" in the shared base above). Externally published: Caddy
+80/443/9000; everything else bound to `127.0.0.1`. dserver reaches S3 via a Docker network
+**alias = `${DEPLOY_FQDN}` on the `caddy` service**, so it reads+signs against the same
+`host:port` the browser uses (consistent SigV4 Host) and the public cert verifies normally.
+
+### Prerequisites (external — cannot be tested from this box)
+
+1. **Public DNS A record** `data.zhang-laboratory.org` → this host's public IP. Required for
+   Let's Encrypt.
+2. **Inbound :80** reachable from the internet for the ACME challenge (firewall opens
+   80/443/9000). Validate against the LE **staging** CA first (flip the issuer `ca` in
+   `caddy.json`) to avoid rate limits, then switch to production.
+3. The **remote bucket `${S3_BUCKET}` must already exist** on the Synology MinIO (nothing in
+   this stack creates it) and should be **private** (presigned URLs are load-bearing).
+4. The remote MinIO's **CORS** must allow the webapp origin `https://${DEPLOY_FQDN}` for
+   browser fetch/XHR of presigned URLs (a different origin: :443 → :9000). Set on the
+   Synology (`MINIO_API_CORS_ALLOW_ORIGIN`); we can't inject it via layer4. Direct
+   navigation to a presigned URL works regardless.
+
+```bash
+cp .env.template .env
+# set DEPLOY_FQDN=data.zhang-laboratory.org, S3_BUCKET, S3_ACCESS_KEY_ID,
+# S3_SECRET_ACCESS_KEY (remote MinIO creds), and optionally OAUTH2_CLIENT_ID/SECRET.
+```
+No cert-generation step: Caddy obtains/renews the LE cert itself (persisted in the
+`caddy_data` volume) and shares it with the :9000 layer4 handler. **Keep `DEPLOY_FQDN` in
+`.env` equal to the host hardcoded in `caddy.json`** (Caddy JSON has no `{$VAR}`).
+
+### Files this site adds / changes (on top of the base)
+
+| File | Role |
+|---|---|
+| `caddy.json` | Caddy **native JSON** config. `apps.http`: :80 ACME/redirect + :443 `/lookup*`→dserver, `/`→webapp. `apps.tls.certificates.automate`: LE cert for the FQDN. `apps.layer4`: :9000 → `tls` (terminate, same managed cert, ALPN pinned to `http/1.1`) → `proxy 10.0.0.2:9000`. **FQDN hardcoded** (no `{$VAR}` in JSON). |
+| `compose/caddy/Dockerfile` | `xcaddy build --with github.com/mholt/caddy-l4` → custom Caddy image (`dserver_caddy_l4`) with the layer4 plugin. Build it **alone** (`docker compose build caddy`) — Go compile on a 2 GB box. |
+| `docker-compose.override.yml` | `caddy` = the xcaddy image, `caddy.json` mounted, `caddy_data` volume, ports 80/443/9000, network alias `${DEPLOY_FQDN}`; `dserver` gunicorn+`SCRIPT_NAME`+`S3_ENDPOINT=https://${DEPLOY_FQDN}:9000`+OAuth2 URLs; `index-s3` S3_ENDPOINT; `webapp` env. No local minio, no `./certs`, no `AWS_CA_BUNDLE`, no LDAP. |
+| `.env.template` | `DEPLOY_FQDN`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `OAUTH2_*`. |
+
+### Why a layer4 proxy fronts :9000 (this site's solution)
+
+See "Why MinIO is NOT fronted by an HTTP reverse proxy" in the shared base for the
+header-canonicalization reason. Because S3 here is **remote and plain-HTTP**, we terminate
+TLS with Caddy's **layer4 (`github.com/mholt/caddy-l4`) plugin**, which after the TLS
+handshake forwards the connection as **raw TCP** — no HTTP parsing, so lowercase
+`x-amz-meta-*` is preserved end to end. The same auto-managed LE cert serves :443 and the
+:9000 layer4 handler via `apps.tls.certificates.automate` in `caddy.json` (the only config
+form that reliably attaches a managed cert to the l4 handler). The l4 `tls` handler's ALPN
+is pinned to `http/1.1` so it never negotiates h2 to the HTTP/1.1-only MinIO (browsers would
+otherwise get an h2 framing error). Caddy reaches `10.0.0.2:9000` over the host's `wg0`
+route, sharing the dserver container's bridge→wg0 egress (verify with
+`docker compose exec caddy wget -qO- http://10.0.0.2:9000/minio/health/live`; fall back to
+`network_mode: host` for caddy if it ever fails). **No `AWS_CA_BUNDLE`** — the cert is in
+the public trust store.
+
+### Certificates (publicly-trusted Let's Encrypt)
+
+Caddy obtains and renews the cert automatically via **ACME** and persists it in the
+`caddy_data` volume. No private CA, no client trust-store changes, no `/etc/hosts`. Needs
+the public DNS record + inbound :80. Validate against the LE **staging** CA first
+(switch the issuer `ca` in `caddy.json`), then flip to production and restart caddy.
+
+### Data ingestion
+
+The remote bucket must already exist (private). Push to the **HTTPS** endpoint
+`https://${DEPLOY_FQDN}:9000` (from a host that trusts the public cert and resolves the
+name). Index with `docker compose --profile index up index-s3` (runs
+`flask base_uri index s3://${S3_BUCKET}` against the remote).
+
+### Bring-up & verification
+
+```bash
+cp .env.template .env                          # set DEPLOY_FQDN, S3_BUCKET, S3 creds, ORCID
+docker compose build caddy                     # xcaddy + caddy-l4 (Go build; run alone, ~2 GB box)
+docker compose up -d                           # first run also builds venv + webapp; slow
+docker compose ps                              # wait for healthy (dserver start_period 60s)
+
+H=$(grep '^DEPLOY_FQDN=' .env | cut -d= -f2-)
+docker compose exec caddy wget -qO- http://10.0.0.2:9000/minio/health/live   # 200 (caddy→wg0→remote)
+curl --resolve $H:443:127.0.0.1 https://$H/lookup/config/health    # {"status":"healthy"}
+curl --resolve $H:443:127.0.0.1 -I https://$H/                     # SPA 200, valid LE cert
+curl --resolve $H:9000:127.0.0.1 https://$H:9000/minio/health/live # 200 via layer4 terminator
+echo | openssl s_client -connect 127.0.0.1:9000 -servername $H 2>/dev/null \
+  | openssl x509 -noout -issuer                                    # issuer = Let's Encrypt
+# presigned URL: mint an admin JWT (flask user token admin, inside the container),
+# GET /lookup/signed-urls/dataset/<url-enc-uri>, then fetch an item_url → 200 + file bytes
+# (no SignatureDoesNotMatch, no metadata KeyError).
+```
+
+### Gotchas discovered during deployment (don't regress these)
+
+- **Caddy must declare `networks: [dserver_net]`** — it's only in the override, so without
+  it Compose drops it on the default network and it can't resolve `dserver`/`webapp`
+  (symptom: 502, `lookup dserver … server misbehaving`).
+- **`caddy.json` hardcodes the FQDN** and is **strict JSON** — Caddy native JSON has no
+  `{$VAR}`/`{env.*}` substitution and **rejects unknown top-level fields** (e.g. a
+  `_comment` key → `json: unknown field`). Keep the host in `caddy.json` equal to
+  `DEPLOY_FQDN`.
+- **layer4 `tls` ALPN must be `http/1.1`** — otherwise it negotiates h2 and raw-forwards h2
+  frames to the HTTP/1.1-only MinIO; browsers then fail with an h2 framing error (botocore
+  is unaffected as it only speaks HTTP/1.1).
+- **The `dserver_image` bakes `/scripts/make-venv.sh`** — `dserver-build-venv` runs the
+  image copy, not the bind-mounted `/app` one. After editing `make-venv.sh` (or advancing
+  submodules it installs), `docker compose build dserver-build-venv` before rebuilding the
+  venv, or the old script runs (symptom: wrong `setuptools`, missing plugins).
+- **`setuptools<81`** (base `make-venv.sh`) — v81 removed `pkg_resources`, which `dtool-cli`
+  imports unconditionally; without the pin the `dtool` CLI won't start.
+- **No `AWS_CA_BUNDLE`** on this path — the S3 cert is publicly trusted. (Don't set the
+  global `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` either.)
+
+### Authentication on this site (ORCID OAuth2 only)
+
+The mechanism is documented in **`## Authentication`** in the shared base; only the
+site deltas:
+
+- **ORCID only.** `VUE_APP_OAUTH2_ENABLED="true"`, `VUE_APP_SHOW_USERNAME_PASSWORD_FORM="false"`.
+  The LDAP plugin is **not installed** (`INSTALL_LDAP_PLUGIN` unset) and the `ldap` service
+  does not run, so there is no `/auth/ldap` token issuer.
+- **Redirect URI to register at ORCID, exactly:** `https://${DEPLOY_FQDN}/lookup/auth/oauth2/callback`
+  (set via `OAUTH2_REDIRECT_URI` in the override; the base `127.0.0.1:5000` default does not
+  apply here). ORCID only redirects the user's browser, which trusts the LE chain — no CA
+  import / `/etc/hosts`.
+- **The username IS the ORCID iD.** New users hit `401` until the one-time provisioning
+  (`flask user add` + `*_permission` on `s3://${S3_BUCKET}`, see the base). The `admin` DB
+  user remains for CLI/scripted JWTs.
+- LE-trusted ⇒ the server-side dserver→orcid.org token exchange and dserver→S3 reads both
+  verify against the public trust store; no per-process CA bundle.
+
+### Open items / things to confirm
+
+- **Institutional SSO:** decide Path A (Entra OIDC) vs Path B (SAML) — see the shared
+  "Future: institutional SSO" section; gated on an answer from institutional IT.
+- **Inbound reachability:** confirm the firewall delivers `:443` and `:9000` from where
+  clients connect (public vs VPN-only) — cannot be tested from the box itself.
+- **RAM:** Vue dev server + mongo + postgres + gunicorn on ~2 GB is tight; the webapp `npm`
+  compile is the OOM risk (`NODE_OPTIONS=--max-old-space-size=512` set).

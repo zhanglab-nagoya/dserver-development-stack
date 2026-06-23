@@ -1,0 +1,112 @@
+# docker-compose.override.yml — HTTPS deployment layer (remote-MinIO + Let's Encrypt).
+#
+# Auto-merged with docker-compose.yml by `docker compose`. Configures an HTTPS deployment:
+#   - One Caddy instance (custom image with the layer4 plugin — compose/caddy/Dockerfile)
+#     terminates VALID Let's Encrypt TLS on :443 (webapp / + dserver API /lookup) and on
+#     :9000 (layer4: TLS-terminate, then RAW-TCP proxy to the remote MinIO).
+#   - dserver runs under gunicorn mounted at /lookup (SCRIPT_NAME).
+#   - The S3 backend is a REMOTE MinIO at 10.0.0.2:9000 (plain HTTP) reached over the
+#     WireGuard tunnel wg0; there is NO local minio container (disabled in the base file).
+#   - Caddy obtains/renews the cert via ACME HTTP-01 and shares it with the :9000 layer4
+#     handler (caddy.json -> apps.tls.certificates.automate). No private CA, no ./certs.
+#
+# The public hostname comes from $DEPLOY_FQDN (set in .env — see .env.template) for the
+# compose-level wiring here; caddy.json names the host directly (Caddy JSON has no {$VAR}
+# substitution). Keep DEPLOY_FQDN in .env equal to the host named in caddy.json.
+#
+# Why a LAYER4 (not HTTP) proxy fronts :9000: an HTTP reverse proxy (Caddy/Go net/http)
+# canonicalises response header names (x-amz-meta-* -> X-Amz-Meta-*), and botocore parses
+# S3 object metadata case-sensitively after the prefix, so proxied reads come back with
+# 'Type'/'Handle' keys and dtool-s3 KeyErrors on dserver's server-side reads (used to mint
+# presigned URLs). A layer4 proxy never parses HTTP, so the lowercase headers survive.
+# See CLAUDE.md "HTTPS deployment recipe" and compose/caddy/Dockerfile.
+
+services:
+  # ==========================================================================
+  # Caddy - LE TLS termination + reverse proxy (:443 web UI/API) and layer4 (:9000 -> remote MinIO)
+  # ==========================================================================
+  caddy:
+    build:
+      context: .
+      dockerfile: ./compose/caddy/Dockerfile
+    image: dserver_caddy_l4
+    depends_on:
+      dserver:
+        condition: service_healthy
+      webapp:
+        condition: service_started
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json"]
+    ports:
+      - "80:80"       # ACME HTTP-01 challenge + HTTP -> HTTPS redirect
+      - "443:443"     # webapp (/) + dserver API (/lookup)
+      - "9000:9000"   # layer4: TLS-terminate, raw-TCP proxy to the remote MinIO
+    volumes:
+      - ./caddy.json:/etc/caddy/caddy.json:ro
+      - caddy_data:/data    # persist the issued LE cert + ACME account (avoid re-issue/rate-limits)
+    networks:
+      dserver_net:
+        aliases:
+          # Resolve the public FQDN to Caddy *inside* the network, so dserver/index-s3 reach
+          # S3 at the same host:port the browser uses — the presigned URL's SigV4 Host
+          # (DEPLOY_FQDN:9000) then matches, and the public LE cert verifies normally.
+          - ${DEPLOY_FQDN:?DEPLOY_FQDN must be set (see .env.template)}
+    restart: unless-stopped
+
+  # ==========================================================================
+  # dserver - serve under gunicorn at /lookup; read+sign S3 against the public TLS endpoint
+  # ==========================================================================
+  dserver:
+    command: ["bash", "/app/compose/dserver/scripts/start-dserver-gunicorn.sh"]
+    environment:
+      # Mount the whole app under /lookup (gunicorn honours SCRIPT_NAME; Caddy routes /lookup*).
+      SCRIPT_NAME: /lookup
+      # Read AND presign against the public S3 endpoint. Resolves to Caddy's :9000 layer4
+      # terminator via the network alias, which raw-TCP-forwards to the remote MinIO — so
+      # reads keep lowercase metadata headers and the presigned URL's SigV4 Host
+      # (DEPLOY_FQDN:9000) matches what the browser sends. The cert is publicly trusted, so
+      # no AWS_CA_BUNDLE is needed. (S3_ENDPOINT here overrides the base http://minio:9000;
+      # export-s3-env.sh turns it into DTOOL_S3_ENDPOINT_<bucket> at runtime.)
+      S3_ENDPOINT: https://${DEPLOY_FQDN}:9000
+      # Pass the FQDN through so the gunicorn start script registers/logs the right base URI.
+      DEPLOY_FQDN: ${DEPLOY_FQDN}
+      # Public URLs behind the proxy (all under /lookup for the API).
+      OAUTH2_BASE_URL: https://${DEPLOY_FQDN}/lookup
+      OAUTH2_FRONTEND_URL: https://${DEPLOY_FQDN}
+      OAUTH2_LOGIN_SUCCESS_REDIRECT: https://${DEPLOY_FQDN}
+      OAUTH2_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
+      # Make Swagger "Try it out" target the prefixed public URL.
+      API_SPEC_OPTIONS: '{"servers":[{"url":"https://${DEPLOY_FQDN}/lookup","description":"dserver"}]}'
+    healthcheck:
+      # The API now lives under /lookup, so the health probe must include the prefix.
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/lookup/config/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ==========================================================================
+  # index-s3 (profile: index) - read S3 over the public TLS endpoint too
+  # ==========================================================================
+  index-s3:
+    environment:
+      S3_ENDPOINT: https://${DEPLOY_FQDN}:9000
+
+  # ==========================================================================
+  # webapp - point at the public HTTPS API; keep the dev server (hot-reload)
+  # ==========================================================================
+  webapp:
+    environment:
+      VUE_APP_DTOOL_LOOKUP_SERVER_URL: https://${DEPLOY_FQDN}/lookup
+      VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL: https://${DEPLOY_FQDN}/lookup/auth/token
+      # Real ORCID OAuth2 login is active (creds in .env). The username/password form is
+      # hidden because the OAuth2 plugin doesn't accept it — only the "Log in with ORCID"
+      # button works. (Set "true" only if you swap in the dummy token generator.)
+      VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "false"
+      # Cap Node heap on this ~2 GB box to reduce OOM risk during compile.
+      NODE_OPTIONS: "--max-old-space-size=512"
+    volumes:
+      # Accept the proxied Host header (allowedHosts) without editing the submodule.
+      - ./compose/webapp/vue.config.js:/app/vue.config.js:ro
+
+volumes:
+  caddy_data: {}   # persist the issued LE cert + ACME account across restarts

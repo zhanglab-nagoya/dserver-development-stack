@@ -1,0 +1,57 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "site": {
+          "listen": [":443"],
+          "routes": [
+            {
+              "match": [{ "host": ["data.zhang-laboratory.org"], "path": ["/lookup*"] }],
+              "handle": [
+                { "handler": "reverse_proxy", "upstreams": [{ "dial": "dserver:5000" }] }
+              ]
+            },
+            {
+              "match": [{ "host": ["data.zhang-laboratory.org"] }],
+              "handle": [
+                { "handler": "reverse_proxy", "upstreams": [{ "dial": "webapp:8080" }] }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "certificates": { "automate": ["data.zhang-laboratory.org"] },
+      "automation": {
+        "policies": [
+          {
+            "subjects": ["data.zhang-laboratory.org"],
+            "issuers": [
+              {
+                "module": "acme",
+                "ca": "https://acme-v02.api.letsencrypt.org/directory"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "layer4": {
+      "servers": {
+        "s3": {
+          "listen": [":9000"],
+          "routes": [
+            {
+              "match": [{ "tls": { "sni": ["data.zhang-laboratory.org"] } }],
+              "handle": [
+                { "handler": "tls", "connection_policies": [{ "alpn": ["http/1.1"] }] },
+                { "handler": "proxy", "upstreams": [{ "dial": ["10.0.0.2:9000"] }] }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
