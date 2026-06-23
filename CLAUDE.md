@@ -409,3 +409,138 @@ Refs: GakuNin <https://www.gakunin.jp/en>; SATOSA
 - This is a **development** stack: debug mode on, wildcard CORS, hard-coded secrets
   (`SECRET_KEY`, DB passwords, `minioadmin`). Never reuse these settings for anything
   exposed.
+
+## HTTPS deployment recipe (this site: acme-deployment — public demo)
+
+> Site overlay on top of the shared base above. A self-contained public demo. Serves the
+> **webapp on `https://${DEPLOY_FQDN}/`**, the **dserver API under `/lookup`** (both on :443
+> via Caddy), and **S3/MinIO over its own TLS on :9000** for browser-usable presigned URLs.
+> Caddy auto-issues a **Let's Encrypt** cert via HTTP-01 on :80; a `cert-sync` sidecar
+> mirrors that cert into a shared volume so the **local** MinIO serves the **same
+> publicly-trusted cert** on :9000. Auth is **username/password (LDAP) by default**, ORCID
+> off. Host name + ACME contact email come from `.env`; no config file names a specific host.
+
+### Topology
+
+```
+  browser ─HTTPS:443──▶ Caddy ── /lookup* ─▶ dserver:5000  (gunicorn, SCRIPT_NAME=/lookup)
+  (LE-trusted)            └──────  /  ──────▶ webapp:8080   (Vue dev server, hot-reload)
+  browser ─HTTPS:9000─────────────────────▶ minio:9000     (MinIO native TLS, same LE cert)
+  dserver ─HTTPS:9000─▶ (FQDN → minio alias) ▶ minio:9000   (read + sign, no proxy)
+
+  cert-sync (sidecar): caddy_data ──cp──▶ minio_certs (poll/30s, MinIO hot-reloads)
+```
+
+Webapp (`/`) and API (`/lookup`) are **same-origin** ⇒ no CORS, no mixed-content. MinIO is
+**not** proxied by Caddy (see "Why MinIO is NOT fronted by an HTTP reverse proxy" in the
+shared base). Externally published: Caddy 80/443 and MinIO 9000; everything else bound to
+`127.0.0.1`.
+
+### Prerequisite: set DEPLOY_FQDN, CADDY_ACME_EMAIL — no cert files to manage
+
+```bash
+cp .env.template .env
+# edit .env: DEPLOY_FQDN=<your-host>, CADDY_ACME_EMAIL=<contact>,
+#   COMPOSE_PROFILES=local-minio,ldap, INSTALL_LDAP_PLUGIN=true
+#   (S3_BUCKET/creds default to the local dev MinIO; optional OAUTH2_*)
+```
+No `./certs/` directory needed. Caddy obtains the cert on first start over the ACME HTTP-01
+challenge — for that to succeed, **public DNS must already resolve `DEPLOY_FQDN` to this
+host and inbound TCP :80 must be reachable from Let's Encrypt**. Inbound :443 (webapp + API)
+and :9000 (S3) must also be reachable from your clients.
+
+### Files this site adds / changes (on top of the base)
+
+| File | Role |
+|---|---|
+| `Caddyfile` | Global `email {$CADDY_ACME_EMAIL}` + site `{$DEPLOY_FQDN}` with routing only — `/lookup*`→dserver, `/`→webapp. Caddy auto-issues TLS via ACME (no `tls` directive). Does **not** proxy S3. |
+| `docker-compose.override.yml` | `caddy` (on `dserver_net`!) with `caddy_data`/`caddy_config` volumes; `cert-sync` sidecar mirroring the LE cert → `minio_certs` volume; local MinIO native TLS (`--certs-dir`, :9000, FQDN alias) reading from `minio_certs`; `minio-init` makes the bucket **private** (`anonymous set none`); `dserver` gunicorn+`SCRIPT_NAME`+`S3_ENDPOINT=https://${DEPLOY_FQDN}:9000`+OAuth2 URLs + re-added deps on `minio-init`/`ldap`; `dserver-build-venv` sets `INSTALL_LDAP_PLUGIN=true`; LDAP/plain-login webapp env. |
+| `.env.template` | `DEPLOY_FQDN`, `CADDY_ACME_EMAIL`, `COMPOSE_PROFILES=local-minio,ldap`, `INSTALL_LDAP_PLUGIN=true`, `S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (local MinIO dev defaults), `OAUTH2_*`. |
+
+This site uses the **local** MinIO + the bundled **LDAP** directory: both are behind base
+profiles, enabled via `COMPOSE_PROFILES=local-minio,ldap`. The LDAP token-generator plugin
+is installed via `INSTALL_LDAP_PLUGIN=true` (base `make-venv.sh` gate). The S3 endpoint is
+overridden to the public TLS host; `export-s3-env.sh` (base) builds the dtool-s3 trio at
+runtime from `S3_BUCKET`/`S3_ENDPOINT`/`S3_*`.
+
+### Why MinIO terminates its own TLS via cert-sync (this site's solution)
+
+See "Why MinIO is NOT fronted by an HTTP reverse proxy" in the shared base for the
+header-canonicalization reason. The local MinIO terminates its **own** TLS on :9000
+(lowercase headers preserved); Caddy is out of the S3 path. To serve a *publicly-trusted*
+cert there without a second ACME client, the `cert-sync` sidecar mirrors Caddy's LE cert
+(see Certificates below). The `minio` service has a network alias = `${DEPLOY_FQDN}`, so
+dserver reads **and** signs against the same `host:port` the browser uses (consistent SigV4
+Host); with the LE cert, boto verifies via the system trust store — no `AWS_CA_BUNDLE`.
+
+### Certificates: Let's Encrypt via Caddy ACME, mirrored to MinIO
+
+Caddy auto-issues and auto-renews an LE cert for `$DEPLOY_FQDN` via HTTP-01 on :80; cert +
+ACME account state live in the `caddy_data` volume (path
+`/data/caddy/certificates/acme-*/{$DEPLOY_FQDN}/{$DEPLOY_FQDN}.{crt,key}`). The `cert-sync`
+sidecar polls that path every 30 s and atomically copies cert/key into the `minio_certs`
+volume as `public.crt`/`private.key`; MinIO watches its certs dir and **hot-reloads**, so
+renewals propagate without restarting MinIO. `cert-sync`'s health-check succeeds once both
+files exist; `minio` `depends_on` it `service_healthy`, gating MinIO's first boot until the
+cert is in place. To break the cycle, **Caddy has no `depends_on`** — it starts first and
+serves 502s for upstreams until they come up.
+
+Clients need do nothing special: the cert chains to ISRG Root X1, trusted by every modern
+OS/browser/curl/boto. **Re-issuance cost:** `docker compose down -v` wipes `caddy_data` and
+forces a fresh ACME run on next boot — fine occasionally, not in a tight loop (LE
+[rate limits](https://letsencrypt.org/docs/rate-limits/)).
+
+### Data ingestion
+
+MinIO is TLS-only, so push to the **HTTPS** endpoint. From inside the dserver container the
+bundled client works:
+```bash
+docker compose exec dserver bash -c "source /venv/bin/activate && bash /scripts/create-test-dataset.sh"
+```
+Then index: `docker compose --profile index up index-s3`. Host-side clients set
+`DTOOL_S3_ENDPOINT_<bucket>=https://$DEPLOY_FQDN:9000`; no CA bundle override needed (LE
+chain trusted by default).
+
+### Bring-up & verification
+
+```bash
+cp .env.template .env                          # DEPLOY_FQDN, CADDY_ACME_EMAIL, COMPOSE_PROFILES, INSTALL_LDAP_PLUGIN
+docker compose up -d --build                   # first run builds venv + webapp; slow on ~2 GB RAM
+docker compose ps                              # cert-sync goes healthy after ACME issuance (~30-60 s); dserver after
+docker compose logs -f caddy                   # watch for "certificate obtained successfully"
+
+H=$(grep '^DEPLOY_FQDN=' .env | cut -d= -f2-)
+curl https://$H/lookup/config/health           # {"status":"healthy"} — valid chain, no flags
+curl -I https://$H/                            # SPA 200
+curl https://$H:9000/minio/health/live         # 200 (MinIO TLS, same LE cert)
+# presigned URL: mint an admin JWT, GET /lookup/signed-urls/dataset/<url-enc-uri>, fetch item_url.
+```
+
+### Gotchas discovered during deployment (don't regress these)
+
+- **Caddy must declare `networks: [dserver_net]`** — only in the override; without it Compose
+  drops it on the default network and it can't resolve `dserver`/`webapp` (502s).
+- **Caddy needs `DEPLOY_FQDN` AND `CADDY_ACME_EMAIL` in its process env** — both are
+  substituted into the Caddyfile at parse time (`{$VAR}`); the override passes them and fails
+  loudly if unset.
+- **Caddy must NOT depend on dserver/webapp** — those transitively depend on MinIO →
+  cert-sync → Caddy, so any `depends_on` back creates a cycle and the stack hangs. Caddy
+  serving 502s briefly during bring-up is fine.
+- **Enable the profiles** — without `COMPOSE_PROFILES=local-minio,ldap` the local MinIO and
+  LDAP directory don't start (they're base-profiled), and `dserver`'s deps on them never
+  resolve.
+- **`docker compose down -v` wipes the LE cert** (in `caddy_data`); next boot re-issues
+  (rate limits — don't loop).
+
+### Authentication on this site (username/password via LDAP)
+
+The mechanism is documented in **`## Authentication`** in the shared base; only the deltas:
+
+- **Plain login on, ORCID off.** `VUE_APP_SHOW_USERNAME_PASSWORD_FORM="true"`,
+  `VUE_APP_OAUTH2_ENABLED="false"`. The form POSTs to
+  `https://${DEPLOY_FQDN}/lookup/auth/ldap/token`. The demo directory is seeded with
+  `testuser` / `test_password` (`LDAP_AUTO_PROVISION_USERS=true` grants them search/register
+  on `LDAP_DEFAULT_BASE_URIS`). Point `LDAP_URI` at a real directory for non-demo use.
+- All public URLs sit behind `/lookup` (gunicorn `SCRIPT_NAME=/lookup`); the override is the
+  source of truth for the `OAUTH2_*` / `VUE_APP_*` URLs, **not** the base `127.0.0.1:5000`
+  dev defaults. LE-trusted ⇒ no client-side CA dance.

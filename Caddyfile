@@ -1,21 +1,24 @@
 # Caddyfile — HTTPS deployment (TLS termination + reverse proxy for the web UI).
 #
-# Serves the shared server cert (./certs/server.crt, signed by ./certs/ca.crt) — the SAME
-# cert/CA MinIO uses for its native TLS on :9000. Clients trust one root: ./certs/ca.crt.
-# Generate the cert with ./gen-tls-certs.sh before `docker compose up`.
+# Caddy auto-issues a Let's Encrypt certificate for $DEPLOY_FQDN via the HTTP-01
+# challenge on :80 (which must be reachable from the public internet). The cert
+# lives in the `caddy_data` named volume (/data/caddy/certificates/...). A small
+# `cert-sync` sidecar mirrors that cert into the `minio_certs` volume so MinIO
+# can serve the SAME publicly-trusted cert on :9000 (see docker-compose.override.yml).
 #
-# The site address is taken from $DEPLOY_FQDN — see .env / .env.template. Caddy
-# substitutes {$VAR} at parse time, so the variable must be in caddy's process
-# environment (docker-compose.override.yml passes it through).
+# Variables {$DEPLOY_FQDN} and {$CADDY_ACME_EMAIL} are substituted at parse time
+# from Caddy's process environment — see the override file.
 #
-# NOTE: S3/MinIO is intentionally NOT proxied here. Caddy (Go net/http) canonicalises
-# response header names (x-amz-meta-* -> X-Amz-Meta-*), which breaks botocore's
-# case-sensitive S3 metadata parsing on dserver's server-side reads. MinIO therefore
-# terminates its own TLS on :9000 (see docker-compose.override.yml).
+# NOTE: S3/MinIO is intentionally NOT proxied here. Caddy (Go net/http)
+# canonicalises response header names (x-amz-meta-* -> X-Amz-Meta-*), which
+# breaks botocore's case-sensitive S3 metadata parsing on dserver's server-side
+# reads. MinIO therefore terminates its own TLS on :9000.
+
+{
+	email {$CADDY_ACME_EMAIL}
+}
 
 {$DEPLOY_FQDN} {
-	tls /certs/server.crt /certs/server.key
-
 	# dserver is mounted under /lookup inside its container (gunicorn SCRIPT_NAME=/lookup).
 	# `handle` (not handle_path) keeps the /lookup prefix on the forwarded request.
 	handle /lookup* {

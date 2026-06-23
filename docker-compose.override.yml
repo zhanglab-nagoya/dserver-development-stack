@@ -1,0 +1,225 @@
+# docker-compose.override.yml — acme-deployment site overlay (publicly-trusted certs).
+#
+# Builds on https-deploy-base (parameterized docker-compose.yml). Auto-merged with it by
+# `docker compose`. Configures a self-contained public demo using Let's Encrypt:
+#   - Caddy auto-issues a cert for $DEPLOY_FQDN via HTTP-01 on :80 and serves the webapp (/)
+#     + dserver API (/lookup) on :443.
+#   - dserver runs under gunicorn mounted at /lookup (SCRIPT_NAME).
+#   - A `cert-sync` sidecar mirrors Caddy's issued cert into the `minio_certs` volume so the
+#     LOCAL MinIO can serve the SAME publicly-trusted cert on :9000.
+#   - MinIO terminates its own TLS on :9000 (NOT proxied by Caddy) so browser presigned-URL
+#     downloads and dserver's server-side S3 reads both work (Caddy/Go net/http would
+#     canonicalise x-amz-meta-* and break botocore's case-sensitive metadata parsing).
+#
+# This site uses the LOCAL minio + ldap. Activate them via the base profiles by setting
+# `COMPOSE_PROFILES=local-minio,ldap` in .env (see .env.template). The S3 backend is driven
+# by the base's S3_*/${S3_BUCKET} model (export-s3-env.sh assembles the dtool-s3 per-bucket
+# trio at runtime); this overlay only overrides S3_ENDPOINT to the public TLS host.
+#
+# Prerequisites (set in .env; both fail compose loudly if unset):
+#   DEPLOY_FQDN          public hostname (must already resolve to this host)
+#   CADDY_ACME_EMAIL     contact email for Let's Encrypt
+# Inbound TCP :80, :443 and :9000 must be reachable from the public internet.
+
+volumes:
+  # Caddy's ACME account + issued certs. Survives `docker compose down`; wiping it forces
+  # re-issuance from Let's Encrypt on the next bring-up.
+  caddy_data: {}
+  # Caddy's runtime config (autosaved).
+  caddy_config: {}
+  # cert-sync writes the LE cert here; MinIO mounts it read-only.
+  minio_certs: {}
+
+services:
+  # ==========================================================================
+  # dserver-build-venv - install the LDAP token generator for this site
+  # ==========================================================================
+  # Base make-venv.sh installs the LDAP plugin only when INSTALL_LDAP_PLUGIN=true; this
+  # site offers username/password login, so opt in here.
+  dserver-build-venv:
+    environment:
+      INSTALL_LDAP_PLUGIN: "true"
+
+  # ==========================================================================
+  # Caddy - TLS termination (Let's Encrypt) + reverse proxy for the web UI
+  # ==========================================================================
+  # No depends_on: Caddy must start first so it can answer the ACME HTTP-01 challenge before
+  # the other services (which transitively need the cert via cert-sync -> minio) come up.
+  # Caddy returns 502 for upstreams that aren't ready yet, which is fine during bring-up.
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"     # ACME HTTP-01 challenge + HTTP -> HTTPS redirect
+      - "443:443"   # webapp (/) + dserver API (/lookup)
+    environment:
+      DEPLOY_FQDN: ${DEPLOY_FQDN:?DEPLOY_FQDN must be set (see .env.template)}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?CADDY_ACME_EMAIL must be set (see .env.template)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # ACME account + issued cert live here
+      - caddy_config:/config
+    networks:
+      - dserver_net   # MUST be on the app network to resolve dserver/webapp via Docker DNS
+    restart: unless-stopped
+
+  # ==========================================================================
+  # cert-sync - mirror Caddy's LE cert into the minio_certs volume.
+  # ==========================================================================
+  # Polls Caddy's storage every 30s; copies the cert into minio_certs/public.crt +
+  # private.key when it changes. MinIO watches its certs dir and hot-reloads on file change,
+  # so renewals propagate without restarts. Reports healthy once both files exist — gates
+  # MinIO's start so MinIO never boots without a cert.
+  cert-sync:
+    image: alpine:3.20
+    depends_on:
+      caddy:
+        condition: service_started
+    environment:
+      DEPLOY_FQDN: ${DEPLOY_FQDN:?DEPLOY_FQDN must be set (see .env.template)}
+    volumes:
+      - caddy_data:/caddy-data:ro
+      - minio_certs:/minio-certs
+    networks:
+      - dserver_net
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        FQDN="$$DEPLOY_FQDN"
+        OUT=/minio-certs
+        echo "cert-sync: waiting for Caddy to issue cert for $$FQDN ..."
+        while :; do
+          SRC=""
+          for D in /caddy-data/caddy/certificates/acme-*/"$$FQDN"; do
+            [ -d "$$D" ] && SRC="$$D" && break
+          done
+          if [ -n "$$SRC" ] && [ -f "$$SRC/$$FQDN.crt" ] && [ -f "$$SRC/$$FQDN.key" ]; then
+            if ! cmp -s "$$SRC/$$FQDN.crt" "$$OUT/public.crt" 2>/dev/null; then
+              cp "$$SRC/$$FQDN.crt" "$$OUT/public.crt.new" && mv "$$OUT/public.crt.new" "$$OUT/public.crt"
+              cp "$$SRC/$$FQDN.key" "$$OUT/private.key.new" && mv "$$OUT/private.key.new" "$$OUT/private.key"
+              echo "$$(date -u +%FT%TZ) cert-sync: refreshed cert at $$OUT"
+            fi
+          fi
+          sleep 30
+        done
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /minio-certs/public.crt && test -s /minio-certs/private.key"]
+      interval: 15s
+      timeout: 5s
+      retries: 30          # ~7.5 min total — covers first-time ACME issuance
+      start_period: 30s
+    restart: unless-stopped
+
+  # ==========================================================================
+  # MinIO - native TLS on :9000 (LE cert via cert-sync); the presigned-URL host
+  # ==========================================================================
+  # Enabled via the base `local-minio` profile (set COMPOSE_PROFILES in .env).
+  minio:
+    depends_on:
+      cert-sync:
+        condition: service_healthy
+    # Serve TLS from the cert cert-sync drops in. --certs-dir expects public.crt + private.key.
+    command: server /data --certs-dir /certs --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API over TLS; must be opened on the IT firewall.
+    volumes:
+      - minio_certs:/certs:ro
+    networks:
+      dserver_net:
+        aliases:
+          # Resolve the public FQDN to MinIO *inside* the network, so dserver/index-s3 reach
+          # S3 at the same host:port the browser uses (consistent SigV4 host) and the LE leaf
+          # cert (CN = FQDN) verifies cleanly inside the network too.
+          - ${DEPLOY_FQDN:?DEPLOY_FQDN must be set (see .env.template)}
+
+  # ==========================================================================
+  # MinIO bucket init - create bucket; KEEP IT PRIVATE (rely on presigned URLs).
+  # ==========================================================================
+  # Uses the FQDN alias inside the network so mc validates the LE cert without --insecure.
+  # The bucket policy is "none" — no anonymous access; all reads via presigned URLs.
+  minio-init:
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set minio https://${DEPLOY_FQDN}:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing minio/${S3_BUCKET};
+      /usr/bin/mc anonymous set none minio/${S3_BUCKET};
+      exit 0;
+      "
+
+  # ==========================================================================
+  # dserver - serve under gunicorn at /lookup; read+sign S3 against the public TLS endpoint
+  # ==========================================================================
+  dserver:
+    depends_on:
+      # Base declares build-venv/postgres/mongo; this site additionally needs the local
+      # MinIO bucket created and the LDAP directory up before dserver starts.
+      minio-init:
+        condition: service_completed_successfully
+      ldap:
+        condition: service_healthy
+    command: ["bash", "/app/compose/dserver/scripts/start-dserver-gunicorn.sh"]
+    environment:
+      # Mount the whole app under /lookup (gunicorn honours SCRIPT_NAME; Caddy routes /lookup*).
+      SCRIPT_NAME: /lookup
+      # Read AND presign against the public S3 endpoint. Overrides the base default
+      # http://minio:9000. Resolves to MinIO directly via the network alias (no proxy), so
+      # reads get lowercase metadata headers and the presigned URL's SigV4 Host
+      # (DEPLOY_FQDN:9000) matches what the browser sends. export-s3-env.sh (base) assembles
+      # the dtool-s3 per-bucket trio from S3_BUCKET/S3_ENDPOINT/S3_* at runtime.
+      S3_ENDPOINT: https://${DEPLOY_FQDN}:9000
+      # No AWS_CA_BUNDLE: with a Let's Encrypt cert the system trust store (ca-certificates in
+      # the python:3.12-slim base) already trusts ISRG Root X1, so boto verifies cleanly.
+      DEPLOY_FQDN: ${DEPLOY_FQDN}
+      # Public URLs behind the proxy (all under /lookup for the API).
+      OAUTH2_BASE_URL: https://${DEPLOY_FQDN}/lookup
+      # The plugin uses OAUTH2_REDIRECT_URI verbatim if set (config.py), and the base
+      # docker-compose.yml pins it to the 127.0.0.1 dev value — so it MUST be overridden here.
+      OAUTH2_REDIRECT_URI: https://${DEPLOY_FQDN}/lookup/auth/oauth2/callback
+      OAUTH2_FRONTEND_URL: https://${DEPLOY_FQDN}
+      OAUTH2_LOGIN_SUCCESS_REDIRECT: https://${DEPLOY_FQDN}
+      OAUTH2_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
+      # Make Swagger "Try it out" target the prefixed public URL.
+      API_SPEC_OPTIONS: '{"servers":[{"url":"https://${DEPLOY_FQDN}/lookup","description":"dserver"}]}'
+    healthcheck:
+      # The API now lives under /lookup, so the health probe must include the prefix.
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000/lookup/config/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ==========================================================================
+  # index-s3 (profile: index) - read S3 over the public TLS endpoint too
+  # ==========================================================================
+  index-s3:
+    environment:
+      S3_ENDPOINT: https://${DEPLOY_FQDN}:9000
+
+  # ==========================================================================
+  # webapp - point at the public HTTPS API; keep the dev server (hot-reload)
+  # ==========================================================================
+  webapp:
+    environment:
+      VUE_APP_DTOOL_LOOKUP_SERVER_URL: https://${DEPLOY_FQDN}/lookup
+      # Username/password form POSTs here. The LDAP token-generator plugin serves
+      # /auth/ldap/token (NOT the old /auth/token), behind the /lookup proxy prefix.
+      VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL: https://${DEPLOY_FQDN}/lookup/auth/ldap/token
+      # ORCID OAuth2 URLs must also sit behind /lookup (plugin prefix /auth/oauth2). Kept
+      # correct so ORCID still works if re-enabled below.
+      VUE_APP_OAUTH2_LOGIN_URL: https://${DEPLOY_FQDN}/lookup/auth/oauth2/login
+      VUE_APP_DTOOL_LOOKUP_SERVER_AUTH_LOGOUT_URL: https://${DEPLOY_FQDN}/lookup/auth/oauth2/logout
+      # --- Login methods for this deployment: plain username/password ON, ORCID OFF. ---
+      VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "true"
+      VUE_APP_OAUTH2_ENABLED: "false"
+      # Login-box message (heading stays "Demo credentials" from the base compose). Rendered
+      # as HTML, so the credentials keep <strong> emphasis.
+      VUE_APP_THIRD_CONTAINER_MESSAGE: "Sign in with the demo account — username <strong>testuser</strong>, password <strong>test_password</strong>."
+      # "Supporting Documentation" link list (SignIn.vue reads this JSON array and only falls
+      # back to its hard-coded defaults when unset).
+      VUE_APP_FOURTH_CONTAINER_RESOURCES: '[{"text":"dtool project homepage","url":"https://www.dtool.dev"},{"text":"dserver REST API documentation","url":"https://demo.dtool.dev/lookup/doc/swagger"},{"text":"dtool documentation","url":"https://dtool.readthedocs.io/"}]'
+      # Cap Node heap on this ~2 GB box to reduce OOM risk during compile.
+      NODE_OPTIONS: "--max-old-space-size=512"
+    volumes:
+      # Accept the proxied Host header (allowedHosts) without editing the submodule.
+      - ./compose/webapp/vue.config.js:/app/vue.config.js:ro
