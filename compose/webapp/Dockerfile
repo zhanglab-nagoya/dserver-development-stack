@@ -2,21 +2,14 @@
 # Node.js based container for Vue.js development server
 FROM node:20-alpine
 
-# Resilience for flaky networks: more npm fetch retries / longer timeouts
-ENV npm_config_fetch_retries=10 \
-    npm_config_fetch_retry_mintimeout=20000 \
-    npm_config_fetch_retry_maxtimeout=120000 \
-    npm_config_fetch_timeout=600000
-
 # Copy and build dserver-client-js first.
-# --ignore-scripts: the package's "prepare" hook runs `npm run build` (tsup over
-# src/), but src/ is not present yet at this layer — the explicit build below does
-# it once the source has been copied in.
+# Its package.json defines a `prepare` script that runs the build (tsup) during
+# `npm install`, so the full source must be present before installing — copying
+# only package*.json first makes `prepare` fail with "Cannot find src/index.ts".
+# (--ignore-scripts is not an option: tsup needs esbuild's install postinstall.)
 WORKDIR /dserver-client-js
-COPY ./dserver-client-js/package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm install --ignore-scripts
 COPY ./dserver-client-js/ ./
-RUN npm run build
+RUN npm install
 
 # Set working directory for webapp
 WORKDIR /app
