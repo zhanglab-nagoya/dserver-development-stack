@@ -115,6 +115,34 @@ services:
       - dserver_net
 
   # ==========================================================================
+  # LDAP - development directory backing username/password authentication
+  # (consumed by the in-process dserver-token-generator-plugin-ldap).
+  # Seeds one demo user: testuser / test_password. Replace with / point at an
+  # external LDAP for real deployments.
+  # ==========================================================================
+  ldap:
+    image: osixia/openldap:1.5.0
+    # --copy-service lets the bind-mounted bootstrap LDIF be applied on init.
+    command: ["--copy-service"]
+    environment:
+      LDAP_ORGANISATION: "Example Org"
+      LDAP_DOMAIN: "example.org"          # -> base dc=example,dc=org
+      LDAP_ADMIN_PASSWORD: "adminpassword"  # -> cn=admin,dc=example,dc=org
+    volumes:
+      # Seed demo user(s) on first boot (see 01-testuser.ldif).
+      - ./compose/ldap/bootstrap:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
+    ports:
+      - "1389:389"   # host 1389 -> container 389 (debug only; plugin uses ldap:389)
+    networks:
+      - dserver_net
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:389 -b '' -s base >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ==========================================================================
   # dserver - Flask REST API for dataset metadata
   # ==========================================================================
   dserver:
@@ -128,6 +156,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      ldap:
+        condition: service_healthy
     volumes:
       - .:/app
       - dserver_venv:/venv
@@ -218,6 +248,28 @@ services:
       OAUTH2_FRONTEND_URL: "http://127.0.0.1:8080"
       OAUTH2_LOGIN_SUCCESS_REDIRECT: "http://127.0.0.1:8080"
       OAUTH2_LOGIN_ERROR_REDIRECT: "http://127.0.0.1:8080/login?error=auth_failed"
+
+      # The OAuth2 plugin now serves under /auth/oauth2 (so the LDAP plugin can
+      # use /auth/ldap). The ORCID redirect URI must match — register exactly
+      # this value at orcid.org/developer-tools.
+      OAUTH2_REDIRECT_URI: "http://127.0.0.1:5000/auth/oauth2/callback"
+
+      # =======================================================================
+      # LDAP Token Generator Plugin Configuration (username/password login)
+      # Serves POST /auth/ldap/token. Authenticates against the bundled dev
+      # OpenLDAP directory; point LDAP_URI at an external LDAP for real use.
+      # =======================================================================
+      LDAP_URI: "ldap://ldap:389"
+      LDAP_BIND_DN: "cn=admin,dc=example,dc=org"
+      LDAP_BIND_PASSWORD: "adminpassword"
+      LDAP_USER_BASE_DN: "ou=users,dc=example,dc=org"
+      LDAP_USER_FILTER: "(cn={username})"
+      LDAP_ATTRIBUTE_MAP: "mail:email,cn:display_name"
+      # On first successful login, create the user in dserver's table and grant
+      # search+register on these base URIs (LDAP authenticates; dserver authorizes).
+      LDAP_AUTO_PROVISION_USERS: "true"
+      LDAP_DEFAULT_BASE_URIS: "s3://dtool-bucket"
+      LDAP_GRANT_REGISTER: "true"
     ports:
       - "5000:5000"
     networks:
@@ -244,6 +296,9 @@ services:
       # Mount source for hot-reload in development
       - ./dtool-lookup-webapp/dtool-lookup-webapp/src:/app/src
       - ./dtool-lookup-webapp/dtool-lookup-webapp/public:/app/public
+      # Stack-specific download templates (served under /stack-templates).
+      # Keeps the webapp submodule's generic templates untouched.
+      - ./compose/webapp/templates:/app/public/stack-templates:ro
       # NOTE: do NOT bind-mount ./dserver-client-js here. The host checkout is
       # unbuilt (no dist/, no node_modules), so mounting it shadows the client
       # library that the image builds (dist/ + deps like spark-md5) and breaks
@@ -253,15 +308,32 @@ services:
       # Use 127.0.0.1 instead of localhost for OAuth2 compatibility
       # (ORCID doesn't allow localhost as redirect URI)
       VUE_APP_DTOOL_LOOKUP_SERVER_URL: http://127.0.0.1:5000
-      VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL: http://127.0.0.1:5000/auth/token
+      # The username/password form POSTs here -> the LDAP token generator.
+      VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL: http://127.0.0.1:5000/auth/ldap/token
+      # OAuth2 (ORCID) login/logout now live under /auth/oauth2.
+      VUE_APP_OAUTH2_LOGIN_URL: http://127.0.0.1:5000/auth/oauth2/login
+      VUE_APP_DTOOL_LOOKUP_SERVER_AUTH_LOGOUT_URL: http://127.0.0.1:5000/auth/oauth2/logout
 
       # OAuth2 configuration for webapp
       # Set to "true" to enable OAuth2 login button
       VUE_APP_OAUTH2_ENABLED: "true"
       # Display name for the OAuth2 provider (shown on login button)
       VUE_APP_OAUTH2_PROVIDER_NAME: "ORCID"
-      # Set to "true" to also show username/password form alongside OAuth2
-      VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "false"
+      # Show the username/password form (LDAP) alongside the ORCID button.
+      VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "true"
+
+      # Account-menu download buttons for starter config / readme templates.
+      VUE_APP_OFFER_DTOOL_JSON_DOWNLOAD: "true"
+      VUE_APP_OFFER_DTOOL_README_YAML_DOWNLOAD: "true"
+      # Serve our localhost-specific dtool.json (the submodule's default points
+      # at demo.dtool.dev). The readme yaml uses the submodule's generic template.
+      VUE_APP_DTOOL_JSON_PATH: "stack-templates/dtool.json"
+
+      # Login-screen info panel ("More Info"): surface the bundled LDAP demo
+      # credentials (rendered as HTML). Matches compose/ldap/bootstrap/*.ldif.
+      VUE_APP_THIRD_CONTAINER_HEADING: "Demo credentials"
+      VUE_APP_THIRD_CONTAINER_MESSAGE: "Sign in with the bundled LDAP demo account — username <strong>testuser</strong>, password <strong>test_password</strong> — or use the ORCID button. (Dev only.)"
+
       # Set to "false" to hide the SignIn screen and run the webapp without a JWT.
       # Must be paired with the dserver running in its own no-auth mode — flipping
       # this flag alone will produce 401s from the API.
