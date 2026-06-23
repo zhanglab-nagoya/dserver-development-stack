@@ -40,3 +40,6 @@
 [submodule "dserver-direct-mongo-plugin"]
 	path = dserver-direct-mongo-plugin
 	url = https://github.com/livMatS/dserver-direct-mongo-plugin.git
+[submodule "dserver-token-generator-plugin-ldap"]
+	path = dserver-token-generator-plugin-ldap
+	url = https://github.com/jic-dtool/dserver-token-generator-plugin-ldap.git
