@@ -18,8 +18,11 @@ WORKDIR /app
 COPY ./dtool-lookup-webapp/dtool-lookup-webapp/package.json ./
 RUN sed -i 's|file:../../dserver-client-js|file:/dserver-client-js|g' package.json
 
-# Install dependencies (generates fresh lockfile)
-RUN npm install
+# Install dependencies (generates fresh lockfile).
+# --ignore-scripts: prevents the symlinked file: dep dserver-client from running
+# its "prepare" hook (tsup --clean), which would wipe the dist/ built just above.
+# The webapp itself defines no install lifecycle scripts, so nothing is lost.
+RUN --mount=type=cache,target=/root/.npm npm install --ignore-scripts
 
 # Copy source files only (exclude node_modules, package-lock.json which would override)
 COPY ./dtool-lookup-webapp/dtool-lookup-webapp/src ./src

@@ -1,39 +1,39 @@
 [submodule "dtool"]
 	path = dtool
-	url = git@github.com:jic-dtool/dtool.git
+	url = https://github.com/jic-dtool/dtool.git
 [submodule "dtoolcore"]
 	path = dtoolcore
-	url = git@github.com:jic-dtool/dtoolcore.git
+	url = https://github.com/jic-dtool/dtoolcore.git
 [submodule "dtool-s3"]
 	path = dtool-s3
-	url = git@github.com:jic-dtool/dtool-s3.git
+	url = https://github.com/jic-dtool/dtool-s3.git
 [submodule "dservercore"]
 	path = dservercore
-	url = git@github.com:jic-dtool/dservercore.git
+	url = https://github.com/jic-dtool/dservercore.git
 [submodule "dtool-lookup-webapp"]
 	path = dtool-lookup-webapp
-	url = git@github.com:livMatS/dtool-lookup-webapp.git
+	url = https://github.com/jic-dtool/dtool-lookup-webapp.git
 [submodule "dserver-dependency-graph-plugin"]
 	path = dserver-dependency-graph-plugin
-	url = git@github.com:livMatS/dserver-dependency-graph-plugin.git
+	url = https://github.com/livMatS/dserver-dependency-graph-plugin.git
 [submodule "dserver-retrieve-plugin-mongo"]
 	path = dserver-retrieve-plugin-mongo
-	url = git@github.com:jic-dtool/dserver-retrieve-plugin-mongo.git
+	url = https://github.com/jic-dtool/dserver-retrieve-plugin-mongo.git
 [submodule "dserver-search-plugin-mongo"]
 	path = dserver-search-plugin-mongo
-	url = git@github.com:jic-dtool/dserver-search-plugin-mongo.git
+	url = https://github.com/jic-dtool/dserver-search-plugin-mongo.git
 [submodule "dserver-notification-plugin"]
 	path = dserver-notification-plugin
-	url = git@github.com:livMatS/dserver-notification-plugin.git
+	url = https://github.com/livMatS/dserver-notification-plugin.git
 [submodule "dtool-dserver"]
 	path = dtool-dserver
-	url = git@github.com:livMatS/dtool-dserver.git
+	url = https://github.com/livMatS/dtool-dserver.git
 [submodule "dserver-signed-url-plugin"]
 	path = dserver-signed-url-plugin
-	url = git@github.com:livMatS/dserver-signed-url-plugin.git
+	url = https://github.com/livMatS/dserver-signed-url-plugin.git
 [submodule "dserver-client-js"]
 	path = dserver-client-js
-	url = git@github.com:livMatS/dserver-client-js.git
+	url = https://github.com/livMatS/dserver-client-js.git
 [submodule "dserver-token-generator-plugin-oauth2"]
 	path = dserver-token-generator-plugin-oauth2
-	url = git@github.com:livMatS/dserver-token-generator-plugin-oauth2.git
+	url = https://github.com/livMatS/dserver-token-generator-plugin-oauth2.git
