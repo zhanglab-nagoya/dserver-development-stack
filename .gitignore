@@ -16,6 +16,9 @@ certs/
 # Local operator notes (host-specific MinIO setup protocol — not for the public repo)
 minio.md
 
+# SAML SP keypair (auto-generated) + IdP metadata dropped in at deploy time — never commit
+compose/dserver/saml/
+
 # Python
 __pycache__/
 *.py[cod]

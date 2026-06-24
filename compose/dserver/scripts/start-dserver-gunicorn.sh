@@ -26,6 +26,22 @@ else
     echo "    JWT keys already exist."
 fi
 
+# SAML SP signing/encryption keypair — only when the SAML plugin is configured
+# (SAML_SP_KEY_FILE set). Self-signed is fine: the IdP trusts the SP via the public cert
+# embedded in the SP metadata we publish at <BASE_URL>/auth/saml/metadata. No-op otherwise.
+if [ -n "${SAML_SP_KEY_FILE:-}" ] && [ ! -f "${SAML_SP_KEY_FILE}" ]; then
+    echo "==> Generating SAML SP keypair (${SAML_SP_KEY_FILE})..."
+    mkdir -p "$(dirname "${SAML_SP_KEY_FILE}")"
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -keyout "${SAML_SP_KEY_FILE}" \
+        -out "${SAML_SP_CERT_FILE:?SAML_SP_CERT_FILE must be set when SAML_SP_KEY_FILE is}" \
+        -days 1095 \
+        -subj "/CN=${DEPLOY_FQDN:-localhost} dserver SAML SP" >/dev/null 2>&1
+    chmod 600 "${SAML_SP_KEY_FILE}"
+    chmod 644 "${SAML_SP_CERT_FILE}"
+    echo "    SAML SP keypair generated (re-publish SP metadata to the IdP after this)."
+fi
+
 echo "==> Waiting for database to be ready..."
 sleep 2
 

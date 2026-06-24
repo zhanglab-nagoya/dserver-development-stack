@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dserver-token-generator-plugin-saml"
+version = "0.1.0"
+description = "Native SAML 2.0 (GakuNin / Shibboleth) token generator for dserver"
+requires-python = ">=3.8"
+# pysaml2 needs the system `xmlsec1` binary + libxmlsec1 (see README / Dockerfile note).
+dependencies = ["pysaml2>=7.4", "PyJWT", "flask", "flask-smorest"]
+
+[project.entry-points."dservercore.extension"]
+saml = "dserver_token_generator_plugin_saml:SamlTokenGeneratorPlugin"
+
+[tool.setuptools.packages.find]
+include = ["dserver_token_generator_plugin_saml*"]
