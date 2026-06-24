@@ -8,6 +8,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
 # System dependencies
+# xmlsec1 + libxmlsec1-dev + libxml2-dev + pkg-config are required by pysaml2 (the SAML
+# token-generator plugin). Harmless when the SAML plugin is not installed.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         curl \
@@ -15,6 +17,10 @@ RUN apt-get update \
         gcc \
         libpq-dev \
         python3-dev \
+        xmlsec1 \
+        libxmlsec1-dev \
+        libxml2-dev \
+        pkg-config \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

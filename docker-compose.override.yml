@@ -23,6 +23,15 @@
 
 services:
   # ==========================================================================
+  # dserver-build-venv - install the SAML token-generator plugin for this branch
+  # ==========================================================================
+  # Base make-venv.sh installs the SAML plugin only when INSTALL_SAML_PLUGIN=true; this
+  # branch wires SAML (THERS 機構IdP) alongside the existing ORCID OAuth2 login.
+  dserver-build-venv:
+    environment:
+      INSTALL_SAML_PLUGIN: "true"
+
+  # ==========================================================================
   # Caddy - LE TLS termination + reverse proxy (:443 web UI/API) and layer4 (:9000 -> remote MinIO)
   # ==========================================================================
   caddy:
@@ -80,6 +89,31 @@ services:
       OAUTH2_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
       # Make Swagger "Try it out" target the prefixed public URL.
       API_SPEC_OPTIONS: '{"servers":[{"url":"https://${DEPLOY_FQDN}/lookup","description":"dserver"}]}'
+      # --- SAML SP (THERS 機構統合認証 / 機構IdP), prefix /saml, alongside ORCID at /auth/oauth2 ---
+      # Public SP endpoints (same-origin behind Caddy /lookup*): metadata/ACS/SLS derive from
+      # SAML_BASE_URL + /saml. Register SAML_SP_ENTITY_ID + the /saml/metadata doc with THERS.
+      SAML_BASE_URL: https://${DEPLOY_FQDN}/lookup
+      SAML_URL_PREFIX: /saml
+      SAML_SP_ENTITY_ID: https://${DEPLOY_FQDN}/lookup/saml/metadata
+      # SP signing/encryption keypair — auto-generated (self-signed) by start-dserver-gunicorn.sh
+      # if missing; its public cert is embedded in the SP metadata THERS imports.
+      SAML_SP_KEY_FILE: /app/compose/dserver/saml/sp-key.pem
+      SAML_SP_CERT_FILE: /app/compose/dserver/saml/sp-cert.pem
+      # THERS test IdP — supplied after they grant test access. Leave empty until then:
+      # /saml/metadata still works (to send THERS our SP metadata); /saml/login activates once
+      # the IdP metadata file is dropped in and these are set in .env.
+      #   SAML_IDP_METADATA_FILE=/app/compose/dserver/saml/thers-test-idp-metadata.xml
+      #   SAML_IDP_ENTITY_ID=<the THERS test IdP entityID>
+      SAML_IDP_METADATA_FILE: ${SAML_IDP_METADATA_FILE:-}
+      SAML_IDP_ENTITY_ID: ${SAML_IDP_ENTITY_ID:-}
+      # THERS attribute release → dserver username. Default follows the Shibboleth/GakuNin
+      # convention (ePPN); CONFIRM against THERS's actual attribute release and override in .env.
+      SAML_ATTRIBUTE_MAP: ${SAML_ATTRIBUTE_MAP:-eduPersonPrincipalName:user_id,mail:email,displayName:display_name}
+      SAML_USERNAME_FIELD: ${SAML_USERNAME_FIELD:-user_id}
+      SAML_LOGIN_SUCCESS_REDIRECT: https://${DEPLOY_FQDN}
+      SAML_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
+      # The SAML plugin mints the same RS256 dserver JWT — point it at dserver's private key.
+      JWT_PRIVATE_KEY_FILE: /app/compose/dserver/jwt/jwt_key
     healthcheck:
       # The API now lives under /lookup, so the health probe must include the prefix.
       test: ["CMD-SHELL", "curl -sf http://localhost:5000/lookup/config/health || exit 1"]

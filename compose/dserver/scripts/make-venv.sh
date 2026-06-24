@@ -69,6 +69,16 @@ else
     echo "==> Skipping LDAP token generator (INSTALL_LDAP_PLUGIN != true)"
 fi
 
+# SAML token generator (pysaml2-based SP). Install only when the site opts in. pysaml2
+# needs the system xmlsec1 binary + libxmlsec1 (provided by the Dockerfile). The editable
+# install pulls pysaml2>=7.4 et al. as declared in the plugin's pyproject.toml.
+if [ "${INSTALL_SAML_PLUGIN:-false}" = "true" ]; then
+    echo "==> Installing dserver-token-generator-plugin-saml (INSTALL_SAML_PLUGIN=true)..."
+    pip install -e /app/dserver-token-generator-plugin-saml
+else
+    echo "==> Skipping SAML token generator (INSTALL_SAML_PLUGIN != true)"
+fi
+
 echo "==> Installing additional dependencies..."
 pip install gunicorn psycopg2-binary PyJWT requests authlib httpx python-dotenv ldap3
 
