@@ -368,8 +368,8 @@ Two viable paths, depending on what your IdP speaks:
   - **Native SAML SP plugin (chosen direction; drafted).** A `dserver-token-generator-plugin-saml`
     `dservercore.extension` (pysaml2) that makes dserver a SAML SP directly —
     `/login` (AuthnRequest), `/acs`, `/metadata`, `/sls` — and mints the same dserver JWT.
-    Prefix is configurable (`SAML_URL_PREFIX`, default `/saml` to coexist with OAuth2's
-    `/auth`). Pure logic (attribute map, JWT) is unit-tested; the live flow is untested
+    Prefix is configurable (`SAML_URL_PREFIX`, default `/auth/saml`, in parallel with
+    `/auth/oauth2` and `/auth/ldap`). Pure logic (attribute map, JWT) is unit-tested; the live flow is untested
     pending IdP metadata + SP registration. Parked on the **`saml-plugin`** branch (off
     `main`) and **not yet wired into the stack** (needs `xmlsec1` in the Dockerfile + an
     install line in `make-venv.sh`); see its `README.md` there.

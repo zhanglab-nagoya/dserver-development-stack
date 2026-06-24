@@ -89,18 +89,20 @@ services:
       OAUTH2_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
       # Make Swagger "Try it out" target the prefixed public URL.
       API_SPEC_OPTIONS: '{"servers":[{"url":"https://${DEPLOY_FQDN}/lookup","description":"dserver"}]}'
-      # --- SAML SP (THERS 機構統合認証 / 機構IdP), prefix /saml, alongside ORCID at /auth/oauth2 ---
+      # --- SAML SP (THERS 機構統合認証 / 機構IdP), prefix /auth/saml, in parallel with the
+      # other auth plugins (/auth/oauth2, /auth/ldap) ---
       # Public SP endpoints (same-origin behind Caddy /lookup*): metadata/ACS/SLS derive from
-      # SAML_BASE_URL + /saml. Register SAML_SP_ENTITY_ID + the /saml/metadata doc with THERS.
+      # SAML_BASE_URL + /auth/saml. Register SAML_SP_ENTITY_ID + the /auth/saml/metadata doc
+      # with THERS.
       SAML_BASE_URL: https://${DEPLOY_FQDN}/lookup
-      SAML_URL_PREFIX: /saml
-      SAML_SP_ENTITY_ID: https://${DEPLOY_FQDN}/lookup/saml/metadata
+      SAML_URL_PREFIX: /auth/saml
+      SAML_SP_ENTITY_ID: https://${DEPLOY_FQDN}/lookup/auth/saml/metadata
       # SP signing/encryption keypair — auto-generated (self-signed) by start-dserver-gunicorn.sh
       # if missing; its public cert is embedded in the SP metadata THERS imports.
       SAML_SP_KEY_FILE: /app/compose/dserver/saml/sp-key.pem
       SAML_SP_CERT_FILE: /app/compose/dserver/saml/sp-cert.pem
       # THERS test IdP — supplied after they grant test access. Leave empty until then:
-      # /saml/metadata still works (to send THERS our SP metadata); /saml/login activates once
+      # /auth/saml/metadata still works (to send THERS our SP metadata); /auth/saml/login activates once
       # the IdP metadata file is dropped in and these are set in .env.
       #   SAML_IDP_METADATA_FILE=/app/compose/dserver/saml/thers-test-idp-metadata.xml
       #   SAML_IDP_ENTITY_ID=<the THERS test IdP entityID>

@@ -28,7 +28,7 @@ fi
 
 # SAML SP signing/encryption keypair — only when the SAML plugin is configured
 # (SAML_SP_KEY_FILE set). Self-signed is fine: the IdP trusts the SP via the public cert
-# embedded in the SP metadata we publish at <BASE_URL>/saml/metadata. No-op otherwise.
+# embedded in the SP metadata we publish at <BASE_URL>/auth/saml/metadata. No-op otherwise.
 if [ -n "${SAML_SP_KEY_FILE:-}" ] && [ ! -f "${SAML_SP_KEY_FILE}" ]; then
     echo "==> Generating SAML SP keypair (${SAML_SP_KEY_FILE})..."
     mkdir -p "$(dirname "${SAML_SP_KEY_FILE}")"

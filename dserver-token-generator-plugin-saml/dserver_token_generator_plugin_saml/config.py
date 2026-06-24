@@ -32,9 +32,10 @@ class Config:
     # URL_PREFIX.
     BASE_URL = os.environ.get("SAML_BASE_URL", "http://localhost:5000")
 
-    # Blueprint mount point (CONFIGURABLE). Defaults to /saml so it can run alongside the
-    # OAuth2 plugin, which claims /auth. Set to /auth to drop-in replace it.
-    URL_PREFIX = os.environ.get("SAML_URL_PREFIX", "/saml")
+    # Blueprint mount point (CONFIGURABLE). Defaults to /auth/saml, in parallel with the
+    # sibling token-generator plugins (/auth/oauth2, /auth/ldap), so every auth route shares
+    # the /auth/* namespace. Override via SAML_URL_PREFIX.
+    URL_PREFIX = os.environ.get("SAML_URL_PREFIX", "/auth/saml")
 
     # SP identity. Defaults to the metadata URL, a common convention.
     SP_ENTITY_ID = os.environ.get("SAML_SP_ENTITY_ID", "") or f"{BASE_URL}{URL_PREFIX}/metadata"

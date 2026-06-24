@@ -11,7 +11,7 @@ other generator and the webapp/`/lookup` wiring is unchanged.
 > mapping, JWT minting) is unit-tested; the live SAML round-trip is untested pending IdP
 > metadata + SP registration. Activating it requires the steps below.
 
-## Routes (under the configurable prefix, default `/saml`)
+## Routes (under the configurable prefix, default `/auth/saml`)
 
 | Route | Purpose |
 |---|---|
@@ -25,7 +25,7 @@ other generator and the webapp/`/lookup` wiring is unchanged.
 
 | Var | Default | Notes |
 |---|---|---|
-| `SAML_URL_PREFIX` | `/saml` | **Configurable mount point.** Use `/auth` to replace the OAuth2 plugin; keep `/saml` to run alongside it. |
+| `SAML_URL_PREFIX` | `/auth/saml` | **Configurable mount point**, in parallel with the sibling plugins `/auth/oauth2` and `/auth/ldap`. |
 | `SAML_BASE_URL` | `http://localhost:5000` | Public base incl. any `SCRIPT_NAME` (e.g. `https://<your-host>/lookup`) |
 | `SAML_SP_ENTITY_ID` | `<BASE_URL><PREFIX>/metadata` | SP entityID |
 | `SAML_IDP_METADATA_URL` / `SAML_IDP_METADATA_FILE` | — | IdP / federation metadata source |
@@ -49,8 +49,8 @@ other generator and the webapp/`/lookup` wiring is unchanged.
    ```sh
    pip install -e /app/dserver-token-generator-plugin-saml
    ```
-   It registers as a `dservercore.extension`. If you keep the OAuth2 plugin too, leave
-   `SAML_URL_PREFIX=/saml` so the two blueprints don't collide on `/auth`.
+   It registers as a `dservercore.extension`. The default `SAML_URL_PREFIX=/auth/saml` sits
+   alongside `/auth/oauth2` (OAuth2) and `/auth/ldap` (LDAP) without collision.
 3. **SP keypair**: generate a signing/encryption cert+key for the SP and point
    `SAML_SP_KEY_FILE`/`SAML_SP_CERT_FILE` at them.
 4. **IdP metadata**: set `SAML_IDP_METADATA_URL` (federation metadata feed or a specific
@@ -60,7 +60,7 @@ other generator and the webapp/`/lookup` wiring is unchanged.
    release** (at least `eduPersonPrincipalName`). This requires publicly reachable SP
    endpoints.
 6. Set `SAML_BASE_URL=https://<your-host>/lookup` and point the webapp's login at
-   `…/saml/login`.
+   `…/auth/saml/login`.
 
 ## Provisioning
 
