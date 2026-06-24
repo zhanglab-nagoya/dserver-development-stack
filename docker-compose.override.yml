@@ -71,6 +71,10 @@ services:
       DEPLOY_FQDN: ${DEPLOY_FQDN}
       # Public URLs behind the proxy (all under /lookup for the API).
       OAUTH2_BASE_URL: https://${DEPLOY_FQDN}/lookup
+      # The plugin uses OAUTH2_REDIRECT_URI verbatim if set, and the base docker-compose.yml
+      # pins it to the 127.0.0.1:5000 dev value — so it MUST be overridden here (plugin is at
+      # /auth/oauth2). Register this exact URI at ORCID.
+      OAUTH2_REDIRECT_URI: https://${DEPLOY_FQDN}/lookup/auth/oauth2/callback
       OAUTH2_FRONTEND_URL: https://${DEPLOY_FQDN}
       OAUTH2_LOGIN_SUCCESS_REDIRECT: https://${DEPLOY_FQDN}
       OAUTH2_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
@@ -98,10 +102,23 @@ services:
     environment:
       VUE_APP_DTOOL_LOOKUP_SERVER_URL: https://${DEPLOY_FQDN}/lookup
       VUE_APP_DTOOL_LOOKUP_SERVER_TOKEN_GENERATOR_URL: https://${DEPLOY_FQDN}/lookup/auth/token
+      # ORCID OAuth2 login/logout URLs (plugin prefix /auth/oauth2). These MUST be overridden:
+      # the base docker-compose.yml pins them to the 127.0.0.1:5000 dev values, which would
+      # otherwise show on the public webapp's "Log in with ORCID" button.
+      VUE_APP_OAUTH2_LOGIN_URL: https://${DEPLOY_FQDN}/lookup/auth/oauth2/login
+      VUE_APP_DTOOL_LOOKUP_SERVER_AUTH_LOGOUT_URL: https://${DEPLOY_FQDN}/lookup/auth/oauth2/logout
       # Real ORCID OAuth2 login is active (creds in .env). The username/password form is
       # hidden because the OAuth2 plugin doesn't accept it — only the "Log in with ORCID"
       # button works. (Set "true" only if you swap in the dummy token generator.)
       VUE_APP_SHOW_USERNAME_PASSWORD_FORM: "false"
+      # Login-page text — override the base compose's dev "Demo credentials" block.
+      # MESSAGE renders as HTML, so the homepage link is an inline <a>.
+      VUE_APP_THIRD_CONTAINER_HEADING: "ZHANG Lab Data Repository"
+      VUE_APP_THIRD_CONTAINER_MESSAGE: 'This is the Data Repository of the ZHANG Lab, Department of Complex Systems Science, Graduate School of Informatics, Nagoya University. See the <a href="https://zhang-laboratory.org">group homepage</a>.'
+      # "Supporting Documentation" links (fourth container). SignIn.vue uses its hard-coded
+      # defaults only when this is unset, so the whole list is given here; the FIRST entry is
+      # the dtool project homepage (replacing the default webapp-repo link, as on demo.dtool.dev).
+      VUE_APP_FOURTH_CONTAINER_RESOURCES: '[{"text":"dtool project homepage","url":"https://dtool.dev"},{"text":"dserver REST API documentation","url":"https://${DEPLOY_FQDN}/lookup/doc/swagger"},{"text":"dtool documentation","url":"https://dtool.readthedocs.io/"}]'
       # Cap Node heap on this ~2 GB box to reduce OOM risk during compile.
       NODE_OPTIONS: "--max-old-space-size=512"
     volumes:
