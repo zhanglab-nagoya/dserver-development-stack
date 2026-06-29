@@ -116,9 +116,13 @@ services:
       SAML_IDP_METADATA_URL: ${SAML_IDP_METADATA_URL:-}
       SAML_IDP_METADATA_FILE: ${SAML_IDP_METADATA_FILE:-}
       SAML_IDP_ENTITY_ID: ${SAML_IDP_ENTITY_ID:-}
-      # THERS attribute release → dserver username. Default follows the Shibboleth/GakuNin
-      # convention (ePPN); CONFIRM against THERS's actual attribute release and override in .env.
-      SAML_ATTRIBUTE_MAP: ${SAML_ATTRIBUTE_MAP:-eduPersonPrincipalName:user_id,mail:email,displayName:display_name}
+      # THERS attribute release → dserver username. Per the THERS manual §4.2, the dserver
+      # username is `uid` = the 機構アカウント (xx.xxx.xxxx@x.thers.ac.jp), which equals
+      # `thersUPN` ("uid と同値"). uid is chosen over eduPersonPrincipalName because the manual
+      # marks ePPN "学認用の属性であり、通常は使用しません" (GakuNin-only, normally unused).
+      # uid/mail/displayName are all natively mapped by pysaml2 (standard LDAP OIDs), so no
+      # raw-OID mapping is needed. Override in .env if THERS releases something different.
+      SAML_ATTRIBUTE_MAP: ${SAML_ATTRIBUTE_MAP:-uid:user_id,mail:email,displayName:display_name}
       SAML_USERNAME_FIELD: ${SAML_USERNAME_FIELD:-user_id}
       SAML_LOGIN_SUCCESS_REDIRECT: https://${DEPLOY_FQDN}
       SAML_LOGIN_ERROR_REDIRECT: https://${DEPLOY_FQDN}/login?error=auth_failed
