@@ -101,11 +101,19 @@ services:
       # if missing; its public cert is embedded in the SP metadata THERS imports.
       SAML_SP_KEY_FILE: /app/compose/dserver/saml/sp-key.pem
       SAML_SP_CERT_FILE: /app/compose/dserver/saml/sp-cert.pem
-      # THERS test IdP — supplied after they grant test access. Leave empty until then:
-      # /auth/saml/metadata still works (to send THERS our SP metadata); /auth/saml/login activates once
-      # the IdP metadata file is dropped in and these are set in .env.
-      #   SAML_IDP_METADATA_FILE=/app/compose/dserver/saml/thers-test-idp-metadata.xml
-      #   SAML_IDP_ENTITY_ID=<the THERS test IdP entityID>
+      # THERS IdP metadata — supplied after they grant test access. Leave empty until then:
+      # /auth/saml/metadata still works (to send THERS our SP metadata); /auth/saml/login
+      # activates once the IdP metadata + entityID are set in .env.
+      #
+      # PREFER the remote URL over a static file: THERS will rotate the IdP's SAML cert to a
+      # self-signed one (~2027-03). pysaml2 trusts the signing key embedded in the IdP
+      # metadata (explicit-key / metadata trust — no PKIX/CA pinning), so a self-signed cert
+      # is fine AS LONG AS we consume fresh metadata. A static SAML_IDP_METADATA_FILE snapshot
+      # would go stale at rotation and break signature validation; the remote URL stays current.
+      #   Production IdP: SAML_IDP_METADATA_URL=https://shib.sys.thers.ac.jp/idp/shibboleth
+      #                   SAML_IDP_ENTITY_ID=https://shib.sys.thers.ac.jp/idp/shibboleth
+      #   Test IdP:       (different URL/entityID, provided by THERS on approval)
+      SAML_IDP_METADATA_URL: ${SAML_IDP_METADATA_URL:-}
       SAML_IDP_METADATA_FILE: ${SAML_IDP_METADATA_FILE:-}
       SAML_IDP_ENTITY_ID: ${SAML_IDP_ENTITY_ID:-}
       # THERS attribute release → dserver username. Default follows the Shibboleth/GakuNin
