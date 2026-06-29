@@ -75,6 +75,15 @@ fi
 if [ "${INSTALL_SAML_PLUGIN:-false}" = "true" ]; then
     echo "==> Installing dserver-token-generator-plugin-saml (INSTALL_SAML_PLUGIN=true)..."
     pip install -e /app/dserver-token-generator-plugin-saml
+    # Dependency-conflict fix: pysaml2 7.5.4 pins pyopenssl<24.3.0, which in turn caps
+    # cryptography<44 — but the OAuth2 plugin's joserfc needs cryptography>=45.0.1. The two
+    # can't coexist, and old pyopenssl 24.2.1 + new cryptography crashes SAML metadata/cert
+    # handling ("module 'lib' has no attribute 'GEN_EMAIL'"). Force a modern pyopenssl that
+    # works with cryptography>=45; pysaml2's <24.3 pin is advisory and works in practice
+    # (verified: SP metadata generation + cert handling). Keep this AFTER the plugin install
+    # so it overrides pysaml2's pinned pyopenssl.
+    echo "==> Upgrading pyopenssl for cryptography>=45 compat (pysaml2/joserfc conflict)..."
+    pip install -U "pyopenssl>=25"
 else
     echo "==> Skipping SAML token generator (INSTALL_SAML_PLUGIN != true)"
 fi
